@@ -1,0 +1,55 @@
+schema: spec-driven
+githubCopilot:
+  cloudAgent: true
+
+context: |
+  PROYECTO: YNAB. Aplicación web de presupuesto personal por sobres
+  (base cero, estilo YNAB). Interfaz en español.
+
+  STACK (no usar nada fuera de esta lista sin aprobación):
+  - Backend: Laravel 13.32.0
+  - Frontend: Blade + Livewire
+  - Base de datos: PostgreSQL
+  - Autenticación: la que ofrece Laravel (starter kit), sin crear una propia
+
+  GLOSARIO (usar estos términos exactos):
+  - Plan: presupuesto mensualizado, de UNA sola moneda.
+  - Cuenta: referencia de dónde está o entra el dinero (efectivo, banco,
+    tarjeta). NO se conecta a bancos reales.
+  - Sobre (subcategoría): tiene nombre, asignado, actividad y disponible.
+  - Dinero por asignar: total mostrado arriba en la vista del plan.
+
+  REGLAS DE NEGOCIO FIJAS (decididas por el usuario, no cambiar):
+  - Cada plan tiene una sola moneda. El campo "multimoneda" del formulario de
+    crear plan es el selector de esa moneda. La moneda se puede editar en la
+    configuración del plan. Para usar otra moneda en paralelo se crea otro plan.
+  - Un plan tiene de 1 a N cuentas.
+  - El plan es mensual, con navegación entre meses.
+  - El disponible (saldo sobrante) de un sobre pasa al mes siguiente.
+  - Un sobre en negativo (gastó más de lo asignado) se muestra en rojo y se
+    puede cubrir moviendo dinero desde otro sobre.
+  - El déficit se arrastra mes a mes acumulándose y se descuenta SOLO del total
+    de arriba (dinero por asignar). Nunca modifica los sobres.
+  - Los montos de dinero nunca se guardan como float. Usar decimal o enteros
+    en centavos.
+
+rules:
+  proposal:
+    - Solo incluir lo que el usuario pidió. Prohibido agregar funcionalidades extra.
+    - Si algo es ambiguo, listarlo en una sección "Preguntas abiertas" en vez de decidir.
+  specs:
+    - Usar Given/When/Then.
+    - Cada requisito debe poder rastrearse a algo que el usuario pidió.
+    - Si falta información, escribir "PENDIENTE" en lugar de inventarla.
+  design:
+    - Usar solo el stack definido en el contexto.
+  tasks:
+    - Tareas pequeñas, cada una verificable de forma independiente.
+    - Incluir una tarea de pruebas por cada requisito con reglas de negocio.
+
+operations:
+  apply:
+    guidance:
+      - Implementar únicamente lo que está en tasks.md y las specs del change.
+      - Si algo no está especificado, detenerse y preguntar.
+      - No modificar archivos ajenos al change actual.
