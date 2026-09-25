@@ -2,23 +2,32 @@
 
 namespace Tests\Feature;
 
+use App\Models\User;
 use DOMDocument;
 use DOMElement;
+use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Tests\TestCase;
 
 class AppShellTest extends TestCase
 {
-    public function test_home_renders_livewire_shell_with_empty_header_and_aside(): void
+    use LazilyRefreshDatabase;
+
+    public function test_authenticated_home_renders_dashboard_not_landing(): void
     {
-        $response = $this->get('/');
+        $user = User::factory()->create();
+
+        $response = $this->actingAs($user)->get('/');
 
         $response->assertOk();
         $response->assertSee('livewire.js', false);
-        $response->assertDontSee('Dinero por asignar');
-        $response->assertDontSee('Nuevo sobre');
+        $response->assertSee('Cerrar sesión');
+        $response->assertSee('Configuración');
+        $response->assertSee('Dinero por asignar');
+        $response->assertSee('Presupuesto Mensual');
+        $response->assertSee('Nuevo sobre');
         $response->assertDontSee('Crear cuenta');
-        $response->assertDontSee('Let\'s get started');
-        $response->assertDontSee('type="password"', false);
+        $response->assertDontSee('Dale un trabajo a cada');
+        $response->assertDontSee('Confirmar contraseña');
 
         $document = new DOMDocument;
         $loaded = $document->loadHTML($response->getContent(), LIBXML_NOERROR);
@@ -32,19 +41,27 @@ class AppShellTest extends TestCase
         $this->assertInstanceOf(DOMElement::class, $header);
         $this->assertInstanceOf(DOMElement::class, $aside);
         $this->assertInstanceOf(DOMElement::class, $main);
-
-        $this->assertRegionIsEmptyOfNavigation($header);
-        $this->assertRegionIsEmptyOfNavigation($aside);
+        $this->assertStringContainsString('Efectivo', $aside->textContent);
+        $this->assertGreaterThan(0, $header->getElementsByTagName('button')->length);
     }
 
-    private function assertRegionIsEmptyOfNavigation(DOMElement $region): void
+    public function test_guest_home_shows_landing_not_dashboard(): void
     {
-        $this->assertSame(0, $region->getElementsByTagName('a')->length);
-        $this->assertSame(0, $region->getElementsByTagName('nav')->length);
-        $this->assertSame(0, $region->getElementsByTagName('ul')->length);
-        $this->assertSame(0, $region->getElementsByTagName('ol')->length);
-        $this->assertSame(0, $region->getElementsByTagName('button')->length);
-        $this->assertSame(0, $region->getElementsByTagName('form')->length);
-        $this->assertSame('', trim($region->textContent));
+        $response = $this->get('/');
+
+        $response->assertOk();
+        $response->assertSee('Crear cuenta');
+        $response->assertSee('Confirmar contraseña');
+        $response->assertSee('Dale un trabajo a cada');
+        $response->assertDontSee('Cerrar sesión');
+        $response->assertDontSee('Dinero por asignar');
+        $response->assertDontSee('Presupuesto Mensual');
+        $response->assertDontSee('Agregar cuenta');
+
+        $document = new DOMDocument;
+        $loaded = $document->loadHTML($response->getContent(), LIBXML_NOERROR);
+
+        $this->assertTrue($loaded);
+        $this->assertNull($document->getElementsByTagName('aside')->item(0));
     }
 }
