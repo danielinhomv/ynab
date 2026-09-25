@@ -84,7 +84,7 @@ new #[Layout('layouts.guest')] #[Title('Iniciar sesión')] class extends Compone
 
         <p class="mt-5 text-center text-sm text-slate-500">
             ¿No tienes cuenta?
-            <a href="{{ route('home') }}" wire:navigate class="font-semibold text-forest hover:underline">Crear cuenta</a>
+            <a href="{{ route('register') }}" wire:navigate class="font-semibold text-forest hover:underline">Crear cuenta</a>
         </p>
     </form>
 </div>

@@ -9,6 +9,10 @@ Route::livewire('/login', 'pages::login')
     ->middleware('guest')
     ->name('login');
 
+Route::livewire('/registro', 'pages::register')
+    ->middleware('guest')
+    ->name('register');
+
 Route::livewire('/configuracion', 'pages::account-settings')
     ->middleware('auth')
     ->name('configuracion');

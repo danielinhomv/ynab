@@ -13,7 +13,7 @@ class HomePageController extends Controller
     {
         $request->route()->action['livewire_component'] = Auth::check()
             ? 'pages::home'
-            : 'pages::register';
+            : 'pages::login';
 
         return app(LivewirePageController::class)();
     }

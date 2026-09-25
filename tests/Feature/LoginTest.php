@@ -11,12 +11,19 @@ class LoginTest extends TestCase
 {
     use LazilyRefreshDatabase;
 
-    public function test_create_account_page_links_to_login(): void
+    public function test_guest_home_shows_login_and_links_to_create_account(): void
     {
         $response = $this->get('/');
 
         $response->assertOk();
-        $response->assertSee(route('login'), false);
+        $response->assertSee('Iniciar sesión');
+        $response->assertSee('Correo electrónico');
+        $response->assertSee('Contraseña');
+        $response->assertSee('Dale un trabajo a cada');
+        $response->assertSee(route('register'), false);
+        $response->assertDontSee('Confirmar contraseña');
+        $response->assertDontSee('Dinero por asignar');
+        $response->assertDontSee('Presupuesto Mensual');
     }
 
     public function test_login_page_links_to_create_account(): void
@@ -24,12 +31,8 @@ class LoginTest extends TestCase
         $response = $this->get(route('login'));
 
         $response->assertOk();
-        $response->assertSee('Correo electrónico');
-        $response->assertSee('Contraseña');
-        $response->assertSee('Dale un trabajo a cada');
-        $response->assertSee(route('home'), false);
-        $response->assertDontSee('Dinero por asignar');
-        $response->assertDontSee('Presupuesto Mensual');
+        $response->assertSee('Iniciar sesión');
+        $response->assertSee(route('register'), false);
     }
 
     public function test_valid_credentials_authenticate(): void

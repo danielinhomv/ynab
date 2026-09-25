@@ -17,6 +17,10 @@ class LogoutTest extends TestCase
 
         $this->actingAs($user);
 
+        $this->get('/')
+            ->assertOk()
+            ->assertSee('Cerrar sesión');
+
         Livewire::test('logout-button')
             ->call('logout')
             ->assertRedirect(route('home'));
@@ -26,7 +30,8 @@ class LogoutTest extends TestCase
         $this->get('/')
             ->assertOk()
             ->assertSee('Crear cuenta')
-            ->assertSee('Confirmar contraseña')
+            ->assertSee('Iniciar sesión')
+            ->assertDontSee('Confirmar contraseña')
             ->assertSee('Dale un trabajo a cada')
             ->assertDontSee('Dinero por asignar');
     }

@@ -17,22 +17,29 @@ La implementación mezcló el formulario de registro dentro de `layouts/app` (he
 - OAuth Google/Apple funcional.
 - Motor real de presupuesto (los montos del dashboard son presentación de la vista, no reglas de negocio persistidas).
 - Verificar correo / reset de contraseña.
+- Vista funcional de configuración de cuenta de usuario.
 
 ## Decisions
 
 ### 1. Layouts separados (obligatorio)
 
-`pages::register` y `pages::login` usan `#[Layout('layouts.guest')]`. `pages::home` y configuración usan `layouts/app`. El visitante nunca monta el aside del dashboard.
+`pages::register` y `pages::login` usan `#[Layout('layouts.guest')]`. `pages::home` usa `layouts/app`. El visitante nunca monta el aside del dashboard.
 
 Alternativa: un solo layout con `@guest` en el aside. Se descarta: produce exactamente el error actual (formulario + sidebar).
 
 ### 2. Landing = chrome de marketing + slot del formulario
 
-`layouts/guest` trae cabecera, columna izquierda de la captura y pie. El slot es solo la tarjeta (registro o login). Así login y registro comparten la misma escena y no el dashboard.
+`layouts/guest` trae cabecera, columna izquierda de la captura y pie. El slot es la tarjeta: en `/` y `/login` es inicio de sesión; en `/registro` es crear cuenta. Así ambas comparten la landing y no el dashboard.
+
+### 2b. Orden de las pantallas de visitante
+
+El visitante MUST ver login primero. Solo va a crear cuenta si elige **Crear cuenta**. Tras logout vuelve al login, no al registro.
 
 ### 3. Dashboard = chrome de la vista de presupuesto
 
-`layouts/app` trae header (logo, plan, moneda, menú de usuario con configuración y logout) y sidebar (navegación, cuentas). El slot es el lienzo del mes (resumen + tabla), fiel a la captura.
+`layouts/app` trae header (logo, plan, moneda, avatar) y sidebar (navegación, cuentas). El slot es el lienzo del mes (resumen + tabla), fiel a la captura.
+
+El avatar abre un menú nativo (`details`/`summary`) para no depender de Alpine: **Cerrar sesión** cierra la sesión; **Configuración** se muestra y no navega (esa vista no está en este change).
 
 ### 4. Marca visual SobrePeso
 

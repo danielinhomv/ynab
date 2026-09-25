@@ -11,9 +11,9 @@ class RegistrationTest extends TestCase
 {
     use LazilyRefreshDatabase;
 
-    public function test_guest_sees_create_account_fields_on_home(): void
+    public function test_guest_sees_create_account_fields_on_register_page(): void
     {
-        $response = $this->get('/');
+        $response = $this->get(route('register'));
 
         $response->assertOk();
         $response->assertSee('Nombre');
@@ -21,8 +21,17 @@ class RegistrationTest extends TestCase
         $response->assertSee('Contraseña');
         $response->assertSee('Confirmar contraseña');
         $response->assertSee('Dale un trabajo a cada');
+        $response->assertSee(route('login'), false);
         $response->assertDontSee('Dinero por asignar');
         $response->assertDontSee('Presupuesto Mensual');
+    }
+
+    public function test_home_does_not_show_create_account_form(): void
+    {
+        $this->get('/')
+            ->assertOk()
+            ->assertDontSee('Confirmar contraseña')
+            ->assertSee(route('register'), false);
     }
 
     public function test_valid_registration_authenticates_and_shows_dashboard(): void

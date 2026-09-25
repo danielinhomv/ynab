@@ -42,29 +42,22 @@
                         Sincronizado
                     </div>
 
-                    <div class="relative" x-data="{ open: false }" @click.outside="open = false">
-                        <button
-                            type="button"
-                            @click="open = !open"
-                            class="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-700 text-sm font-semibold ring-2 ring-white/20"
+                    <details class="relative">
+                        <summary
+                            class="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-full bg-emerald-700 text-sm font-semibold ring-2 ring-white/20 marker:content-none [&::-webkit-details-marker]:hidden"
                             aria-label="Menú de usuario"
                         >
                             {{ strtoupper(substr(auth()->user()->name, 0, 1)) }}
-                        </button>
-                        <div
-                            x-show="open"
-                            x-cloak
-                            x-transition.opacity
-                            class="absolute right-0 mt-2 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-slate-800 shadow-lg"
-                        >
+                        </summary>
+                        <div class="absolute right-0 z-40 mt-2 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-slate-800 shadow-lg">
                             <div class="border-b border-slate-100 px-3 py-2">
                                 <p class="truncate text-sm font-medium">{{ auth()->user()->name }}</p>
                                 <p class="truncate text-xs text-slate-500">{{ auth()->user()->email }}</p>
                             </div>
-                            <a href="{{ route('configuracion') }}" wire:navigate class="block px-3 py-2 text-sm hover:bg-mint">Configuración</a>
+                            <p class="px-3 py-2 text-sm text-slate-400" aria-disabled="true">Configuración</p>
                             <livewire:logout-button />
                         </div>
-                    </div>
+                    </details>
                 </div>
             </header>
 

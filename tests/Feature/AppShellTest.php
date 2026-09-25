@@ -42,7 +42,19 @@ class AppShellTest extends TestCase
         $this->assertInstanceOf(DOMElement::class, $aside);
         $this->assertInstanceOf(DOMElement::class, $main);
         $this->assertStringContainsString('Efectivo', $aside->textContent);
+        $this->assertStringContainsString('Cerrar sesión', $header->textContent);
+        $this->assertStringContainsString('Configuración', $header->textContent);
+        $this->assertSame(1, $header->getElementsByTagName('details')->length);
         $this->assertGreaterThan(0, $header->getElementsByTagName('button')->length);
+
+        $headerHrefs = [];
+        foreach ($header->getElementsByTagName('a') as $anchor) {
+            $headerHrefs[] = $anchor->getAttribute('href');
+        }
+
+        $this->assertFalse(
+            collect($headerHrefs)->contains(fn (string $href): bool => str_contains($href, 'configuracion')),
+        );
     }
 
     public function test_guest_home_shows_landing_not_dashboard(): void
@@ -51,7 +63,8 @@ class AppShellTest extends TestCase
 
         $response->assertOk();
         $response->assertSee('Crear cuenta');
-        $response->assertSee('Confirmar contraseña');
+        $response->assertSee('Iniciar sesión');
+        $response->assertDontSee('Confirmar contraseña');
         $response->assertSee('Dale un trabajo a cada');
         $response->assertDontSee('Cerrar sesión');
         $response->assertDontSee('Dinero por asignar');
