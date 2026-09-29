@@ -15,23 +15,32 @@ context: |
   GLOSARIO (usar estos términos exactos):
   - Plan: presupuesto mensualizado, de UNA sola moneda.
   - Cuenta: referencia de dónde está o entra el dinero (efectivo, banco,
-    tarjeta). NO se conecta a bancos reales.
+    tarjeta). NO se conecta a bancos reales. Puede ser de tipo tarjeta o
+    "indefinida" (efectivo).
   - Sobre (subcategoría): tiene nombre, asignado, actividad y disponible.
   - Dinero por asignar: total mostrado arriba en la vista del plan.
+
+  UI Y UX (aplica a todo change):
+  - Mantener la UI existente (layout, componentes, estilos ya creados).
+  - Eficacia: el usuario logra su objetivo rápido y sin errores.
+  - Eficiencia: mínimos pasos y clics por acción.
+  - Satisfacción: navegación cómoda, con mensajes claros de éxito y error.
 
   REGLAS DE NEGOCIO FIJAS (decididas por el usuario, no cambiar):
   - Cada plan tiene una sola moneda. El campo "multimoneda" del formulario de
     crear plan es el selector de esa moneda. La moneda se puede editar en la
     configuración del plan. Para usar otra moneda en paralelo se crea otro plan.
+  - El formulario de crear plan tiene: nombre, multimoneda (moneda), fecha,
+    number format y currency placement.
   - Un plan tiene de 1 a N cuentas.
   - El plan es mensual, con navegación entre meses.
-  - El disponible (saldo sobrante) de un sobre pasa al mes siguiente.
   - Un sobre en negativo (gastó más de lo asignado) se muestra en rojo y se
     puede cubrir moviendo dinero desde otro sobre.
   - El déficit se arrastra mes a mes acumulándose y se descuenta SOLO del total
     de arriba (dinero por asignar). Nunca modifica los sobres.
   - Los montos de dinero nunca se guardan como float. Usar decimal o enteros
     en centavos.
+  - PENDIENTE DE CONFIRMAR: el disponible de un sobre pasa al mes siguiente.
 
 rules:
   proposal:
@@ -46,10 +55,6 @@ rules:
   tasks:
     - Tareas pequeñas, cada una verificable de forma independiente.
     - Incluir una tarea de pruebas por cada requisito con reglas de negocio.
-
-operations:
-  apply:
-    guidance:
-      - Implementar únicamente lo que está en tasks.md y las specs del change.
-      - Si algo no está especificado, detenerse y preguntar.
-      - No modificar archivos ajenos al change actual.
+    - Implementar únicamente lo que está en tasks.md y las specs del change.
+    - Si algo no está especificado, detenerse y preguntar.
+    - No modificar archivos ajenos al change actual.

@@ -7,7 +7,7 @@ Define el cascarón visual de la aplicación: barra superior y barra lateral vac
 ## Requirements
 
 ### Requirement: Layout base con barras vacías
-La ruta principal MUST mostrar un layout con tres regiones: barra superior a lo ancho, barra lateral izquierda y área de contenido. La barra superior y la barra lateral MUST existir y MUST estar vacías de ítems de navegación, cuentas, totales, botones de acción y datos de presupuesto. El área de contenido MUST estar presente y MUST NOT mostrar formularios de registro, landing de marketing ni reglas de negocio.
+El usuario autenticado MUST ver un dashboard con tres regiones según la vista de referencia: barra superior a lo ancho (marca, plan, usuario), barra lateral izquierda (navegación y cuentas) y área de contenido del presupuesto. Un visitante MUST NOT ver este dashboard; MUST ver la landing de iniciar sesión. El dashboard MUST NOT incluir el formulario de registro ni la columna de marketing de la landing.
 
 #### Scenario: Visitante ve el cascarón vacío
 - **GIVEN** un visitante abre la aplicación
@@ -18,3 +18,18 @@ La ruta principal MUST mostrar un layout con tres regiones: barra superior a lo 
 - **GIVEN** la pantalla del layout base
 - **WHEN** el visitante la inspecciona
 - **THEN** no hay autenticación, planes, cuentas, sobres ni dinero por asignar
+
+#### Scenario: Usuario autenticado ve el dashboard
+- **GIVEN** un usuario autenticado
+- **WHEN** solicita la ruta principal
+- **THEN** ve barra superior con el avatar de usuario, barra lateral con navegación y área de presupuesto, y no ve el formulario de crear cuenta ni el titular de la landing
+
+#### Scenario: Visitante no ve el dashboard en la ruta principal
+- **GIVEN** un visitante
+- **WHEN** solicita la ruta principal
+- **THEN** ve la landing de iniciar sesión y no ve la barra lateral de cuentas ni la navegación de presupuesto
+
+#### Scenario: Dashboard y landing son vistas distintas
+- **GIVEN** las dos pantallas de la aplicación
+- **WHEN** se comparan visitante y usuario autenticado
+- **THEN** no comparten el mismo chrome: la landing no tiene aside de presupuesto y el dashboard no tiene el formulario de registro

@@ -97,54 +97,16 @@
                         </nav>
 
                         <p class="mt-6 px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Cuentas</p>
-                        <ul class="mt-2 space-y-1">
-                            <li class="flex items-center justify-between rounded-xl px-3 py-2 text-sm">
-                                <span class="flex items-center gap-2.5 text-slate-700">
-                                    <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-mint text-forest">
-                                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                                        </svg>
-                                    </span>
-                                    Efectivo
-                                </span>
-                                <span class="text-xs font-medium text-slate-600">Bs 1.250,00</span>
-                            </li>
-                            <li class="flex items-center justify-between rounded-xl px-3 py-2 text-sm">
-                                <span class="flex items-center gap-2.5 text-slate-700">
-                                    <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-mint text-forest">
-                                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" />
-                                        </svg>
-                                    </span>
-                                    Banco Sol
-                                </span>
-                                <span class="text-xs font-medium text-slate-600">Bs 8.400,00</span>
-                            </li>
-                            <li class="flex items-center justify-between rounded-xl px-3 py-2 text-sm">
-                                <span class="flex items-center gap-2.5 text-slate-700">
-                                    <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-mint text-forest">
-                                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" />
-                                        </svg>
-                                    </span>
-                                    Banco Ganadero
-                                </span>
-                                <span class="text-xs font-medium text-slate-600">Bs 5.200,00</span>
-                            </li>
-                        </ul>
-                        <button type="button" class="mt-2 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-forest hover:bg-mint">
-                            <span class="text-lg leading-none">+</span>
-                            Agregar cuenta
-                        </button>
+                        <livewire:plan-accounts />
                     </div>
 
-                    <div class="border-t border-emerald-100 px-5 py-4">
-                        <p class="text-[11px] uppercase tracking-wider text-slate-400">Total en Cuentas</p>
-                        <p class="mt-1 text-lg font-semibold text-forest-dark">Bs 14.850,00</p>
-                    </div>
+                    <div id="cuentas-total" class="border-t border-emerald-100 px-5 py-4"></div>
                 </aside>
 
                 <main class="min-w-0 flex-1 overflow-y-auto">
+                    <div class="px-4 pt-5 sm:px-6 lg:px-8">
+                        <livewire:plan-list />
+                    </div>
                     {{ $slot }}
                 </main>
             </div>

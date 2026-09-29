@@ -41,7 +41,10 @@ class AppShellTest extends TestCase
         $this->assertInstanceOf(DOMElement::class, $header);
         $this->assertInstanceOf(DOMElement::class, $aside);
         $this->assertInstanceOf(DOMElement::class, $main);
-        $this->assertStringContainsString('Efectivo', $aside->textContent);
+        $this->assertStringContainsString('Total en Cuentas', $aside->textContent);
+        $this->assertStringContainsString('Agregar cuenta', $aside->textContent);
+        $this->assertStringNotContainsString('Banco Sol', $aside->textContent);
+        $this->assertStringNotContainsString('Bs 14.850,00', $aside->textContent);
         $this->assertStringContainsString('Cerrar sesión', $header->textContent);
         $this->assertStringContainsString('Configuración', $header->textContent);
         $this->assertSame(1, $header->getElementsByTagName('details')->length);

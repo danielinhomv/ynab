@@ -16,3 +16,15 @@ Route::livewire('/registro', 'pages::register')
 Route::livewire('/configuracion', 'pages::account-settings')
     ->middleware('auth')
     ->name('configuracion');
+
+Route::livewire('/planes/crear', 'pages::create-plan')
+    ->middleware('auth')
+    ->name('planes.crear');
+
+Route::livewire('/planes/{plan}', 'pages::plan')
+    ->middleware('auth')
+    ->name('planes.show');
+
+Route::livewire('/cuentas/{cuenta}', 'pages::cuenta')
+    ->middleware('auth')
+    ->name('cuentas.show');
