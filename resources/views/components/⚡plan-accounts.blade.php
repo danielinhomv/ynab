@@ -1,8 +1,13 @@
 <?php
 
 use App\Models\Cuenta;
+use App\Models\Ingreso;
 use App\Models\Plan;
+use App\Models\Transferencia;
+use App\Services\ExchangeRateService;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\On;
 use Livewire\Component;
@@ -23,16 +28,45 @@ new class extends Component
 
     public ?int $editingId = null;
 
+    public ?int $planId = null;
+
+    public bool $transferOpen = false;
+
+    public ?int $fromCuentaId = null;
+
+    public ?int $toCuentaId = null;
+
+    public string $transferAmount = '';
+
+    public int $transferYear = 0;
+
+    public int $transferMonth = 0;
+
+    public string $transferMessage = '';
+
+    public function mount(): void
+    {
+        $user = Auth::user();
+
+        if ($user === null) {
+            return;
+        }
+
+        $this->planId = $user->plans()->latest('id')->value('id');
+        $this->transferYear = (int) now()->year;
+        $this->transferMonth = (int) now()->month;
+    }
+
     #[Computed]
     public function plan(): ?Plan
     {
         $user = Auth::user();
 
-        if ($user === null) {
+        if ($user === null || $this->planId === null) {
             return null;
         }
 
-        return $user->plans()->latest('id')->first();
+        return $user->plans()->whereKey($this->planId)->first();
     }
 
     /**
@@ -50,6 +84,67 @@ new class extends Component
         return $plan->cuentas()->orderBy('id')->get();
     }
 
+    /**
+     * @return \Illuminate\Database\Eloquent\Collection<int, Cuenta>
+     */
+    #[Computed]
+    public function allCuentas()
+    {
+        $userId = Auth::id();
+
+        if ($userId === null) {
+            return new \Illuminate\Database\Eloquent\Collection;
+        }
+
+        return Cuenta::query()
+            ->with('plan')
+            ->whereHas('plan', fn ($query) => $query->where('user_id', $userId))
+            ->orderBy('id')
+            ->get();
+    }
+
+    #[Computed]
+    public function transferPreview(): ?string
+    {
+        $amount = $this->normalizedBalance(trim($this->transferAmount));
+        $from = $this->fromCuentaId !== null ? $this->ownedCuenta($this->fromCuentaId) : null;
+        $to = $this->toCuentaId !== null ? $this->ownedCuenta($this->toCuentaId) : null;
+
+        if ($amount === null || $from === null || $to === null || $from->id === $to->id) {
+            return null;
+        }
+
+        try {
+            $converted = app(ExchangeRateService::class)->convert($from->plan->currency, $to->plan->currency, $amount);
+            $rate = app(ExchangeRateService::class)->quote($from->plan->currency, $to->plan->currency);
+        } catch (\RuntimeException) {
+            return null;
+        }
+
+        return $from->plan->formatMoney($amount).' → '.$to->plan->formatMoney($converted).' ('.$rate.')';
+    }
+
+    #[On('plan-abierto')]
+    public function abrirPlan(int $planId): void
+    {
+        $userId = Auth::id();
+
+        if ($userId === null) {
+            return;
+        }
+
+        $plan = Plan::query()->where('user_id', $userId)->whereKey($planId)->first();
+
+        if ($plan === null) {
+            return;
+        }
+
+        $this->planId = $plan->id;
+        $this->closePopup();
+        unset($this->plan);
+        unset($this->cuentas);
+    }
+
     #[On('ingreso-guardado')]
     public function refreshBalances(): void
     {
@@ -63,8 +158,155 @@ new class extends Component
             return;
         }
 
+        $this->closeTransfer();
         $this->resetForm();
         $this->open = true;
+    }
+
+    public function openTransfer(): void
+    {
+        if (! Auth::check() || $this->allCuentas->count() < 2) {
+            return;
+        }
+
+        $this->closePopup();
+        $this->resetTransfer();
+        $this->fromCuentaId = $this->cuentas->first()?->id ?? $this->allCuentas->first()?->id;
+        $this->toCuentaId = $this->allCuentas->firstWhere('id', '!=', $this->fromCuentaId)?->id;
+        $this->transferOpen = true;
+    }
+
+    public function closeTransfer(): void
+    {
+        $this->transferOpen = false;
+        $this->resetTransfer();
+    }
+
+    public function saveTransfer(): void
+    {
+        if (! Auth::check()) {
+            return;
+        }
+
+        $this->transferMessage = '';
+        $this->transferAmount = trim($this->transferAmount);
+
+        $this->validate([
+            'fromCuentaId' => ['required', 'integer'],
+            'toCuentaId' => ['required', 'integer'],
+            'transferAmount' => ['required', 'string', 'max:255'],
+            'transferYear' => ['required', 'integer', 'min:2000', 'max:2100'],
+            'transferMonth' => ['required', 'integer', 'min:1', 'max:12'],
+        ], [
+            'fromCuentaId.required' => 'El valor no es válido.',
+            'toCuentaId.required' => 'El valor no es válido.',
+            'transferAmount.required' => 'El valor no es válido.',
+        ]);
+
+        if ($this->fromCuentaId === $this->toCuentaId) {
+            $this->addError('toCuentaId', 'El valor no es válido.');
+
+            return;
+        }
+
+        $amount = $this->normalizedBalance($this->transferAmount);
+
+        if ($amount === null) {
+            $this->addError('transferAmount', 'El valor no es válido.');
+
+            return;
+        }
+
+        $from = $this->ownedCuenta($this->fromCuentaId);
+        $to = $this->ownedCuenta($this->toCuentaId);
+
+        if ($from === null || $to === null) {
+            return;
+        }
+
+        try {
+            $rates = app(ExchangeRateService::class);
+            $converted = $rates->convert($from->plan->currency, $to->plan->currency, $amount);
+            $quote = $rates->quote($from->plan->currency, $to->plan->currency);
+        } catch (\RuntimeException) {
+            $this->addError('transferAmount', 'No se pudo obtener el tipo de cambio.');
+
+            return;
+        }
+
+        try {
+            DB::transaction(function () use ($from, $to, $amount, $converted, $quote): void {
+                $ids = [$from->id, $to->id];
+                sort($ids);
+                $locked = Cuenta::query()
+                    ->with('plan')
+                    ->whereIn('id', $ids)
+                    ->orderBy('id')
+                    ->lockForUpdate()
+                    ->get()
+                    ->keyBy('id');
+
+                $source = $locked->get($from->id);
+                $dest = $locked->get($to->id);
+
+                if (! $source instanceof Cuenta || ! $dest instanceof Cuenta) {
+                    throw new \RuntimeException('insufficient');
+                }
+
+                if (bccomp($source->balance, $amount, 2) < 0) {
+                    throw new \RuntimeException('insufficient');
+                }
+
+                $source->update([
+                    'balance' => bcsub($source->balance, $amount, 2),
+                ]);
+                $dest->update([
+                    'balance' => bcadd($dest->balance, $converted, 2),
+                ]);
+
+                $fecha = Carbon::create($this->transferYear, $this->transferMonth, 1);
+
+                if ((int) now()->year === $this->transferYear && (int) now()->month === $this->transferMonth) {
+                    $fecha = now();
+                }
+
+                Ingreso::query()->create([
+                    'cuenta_id' => $dest->id,
+                    'fecha' => $fecha->toDateString(),
+                    'origen' => 'Transferencia',
+                    'descripcion' => $source->name,
+                    'monto' => $converted,
+                ]);
+
+                Transferencia::query()->create([
+                    'from_cuenta_id' => $source->id,
+                    'to_cuenta_id' => $dest->id,
+                    'monto_origen' => $amount,
+                    'monto_destino' => $converted,
+                    'moneda_origen' => $source->plan->currency,
+                    'moneda_destino' => $dest->plan->currency,
+                    'tipo_cambio' => $quote,
+                    'anio' => $this->transferYear,
+                    'mes' => $this->transferMonth,
+                    'fecha' => $fecha->toDateString(),
+                ]);
+            });
+        } catch (\RuntimeException $exception) {
+            if ($exception->getMessage() !== 'insufficient') {
+                throw $exception;
+            }
+
+            $this->addError('transferAmount', 'No alcanza en la cuenta.');
+
+            return;
+        }
+
+        unset($this->plan);
+        unset($this->cuentas);
+        unset($this->allCuentas);
+        $this->dispatch('saldos-cambiaron')->to('plan-sobres');
+        $this->closeTransfer();
+        $this->transferMessage = 'transferencia registrada exitosamente';
     }
 
     public function closePopup(): void
@@ -170,6 +412,7 @@ new class extends Component
         ]);
 
         $this->step = 'success';
+        unset($this->cuentas);
     }
 
     private function resetForm(): void
@@ -183,6 +426,16 @@ new class extends Component
         $this->resetValidation();
     }
 
+    private function resetTransfer(): void
+    {
+        $this->fromCuentaId = null;
+        $this->toCuentaId = null;
+        $this->transferAmount = '';
+        $this->transferYear = (int) now()->year;
+        $this->transferMonth = (int) now()->month;
+        $this->resetValidation();
+    }
+
     private function ownedCuenta(int $cuentaId): ?Cuenta
     {
         $userId = Auth::id();
@@ -192,6 +445,7 @@ new class extends Component
         }
 
         return Cuenta::query()
+            ->with('plan')
             ->whereKey($cuentaId)
             ->whereHas('plan', fn ($query) => $query->where('user_id', $userId))
             ->first();
@@ -287,9 +541,9 @@ new class extends Component
         @if ($this->cuentas->isNotEmpty())
             <ul class="mt-1 space-y-1">
                 @foreach ($this->cuentas as $cuenta)
-                    <li class="flex items-center gap-1 rounded-xl px-3 py-2 text-sm">
+                    <li class="flex items-center gap-1 rounded-xl px-2 py-1.5 text-sm hover:bg-mint/50">
                         <a href="{{ route('cuentas.show', $cuenta) }}" wire:navigate class="flex min-w-0 flex-1 items-center gap-2.5 text-slate-700">
-                            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-mint text-forest">
+                            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-mint text-forest">
                                 @if ($cuenta->type === 'tarjeta_credito')
                                     <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
                                         <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" />
@@ -300,10 +554,10 @@ new class extends Component
                                     </svg>
                                 @endif
                             </span>
-                            <span class="truncate">{{ $cuenta->name }}</span>
+                            <span class="truncate font-medium">{{ $cuenta->name }}</span>
                         </a>
-                        <span class="shrink-0 text-xs font-medium text-slate-600">{{ $this->formatAmount($cuenta->balance) }}</span>
-                        <button type="button" wire:click="edit({{ $cuenta->id }})" aria-label="Editar" class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400">
+                        <span class="shrink-0 text-xs font-semibold text-forest">{{ $this->formatAmount($cuenta->balance) }}</span>
+                        <button type="button" wire:click="edit({{ $cuenta->id }})" aria-label="Editar" class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-white hover:text-forest">
                             <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 3.487a2.25 2.25 0 1 1 3.182 3.182L8.25 18.463 4.5 19.5l1.037-3.75 11.325-12.263Z" />
                             </svg>
@@ -318,10 +572,21 @@ new class extends Component
             <p class="mt-1 text-lg font-semibold text-forest-dark">{{ $this->formattedTotal }}</p>
         @endteleport
 
-        <button type="button" wire:click="openPopup" class="mt-2 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-forest hover:bg-mint">
-            <span class="text-lg leading-none">+</span>
-            Agregar cuenta
-        </button>
+        @if ($transferMessage !== '')
+            <p class="mt-2 text-xs font-medium text-forest">{{ $transferMessage }}</p>
+        @endif
+
+        <div class="mt-2 space-y-1">
+            <button type="button" wire:click="openPopup" class="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-forest hover:bg-mint">
+                <span class="text-lg leading-none">+</span>
+                Agregar cuenta
+            </button>
+            @if ($this->allCuentas->count() >= 2)
+                <button type="button" wire:click="openTransfer" class="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-forest hover:bg-mint">
+                    Transferir
+                </button>
+            @endif
+        </div>
 
         @if ($open)
             @teleport('body')
@@ -369,6 +634,78 @@ new class extends Component
                             </form>
                             <button type="button" wire:click="closePopup" class="mt-4 text-sm text-slate-500">Cerrar</button>
                         @endif
+                    </section>
+                </div>
+            @endteleport
+        @endif
+
+        @if ($transferOpen)
+            @teleport('body')
+                <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+                    <section class="w-full max-w-md rounded-2xl bg-white p-6 shadow-sm ring-1 ring-emerald-100">
+                        <h2 class="text-lg font-semibold tracking-tight text-slate-900">Transferir</h2>
+                        <p class="mt-1 text-sm text-slate-500">Entre cuentas de cualquier plan. El ingreso llega al mes que elijas.</p>
+                        <form wire:submit="saveTransfer" class="mt-5 space-y-4">
+                            <div>
+                                <label for="transfer-from" class="mb-1.5 block text-sm font-medium text-slate-700">Sale de</label>
+                                <select id="transfer-from" wire:model.live="fromCuentaId" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 focus:border-forest focus:bg-white focus:ring-4">
+                                    <option value="">Elegir cuenta</option>
+                                    @foreach ($this->allCuentas as $cuenta)
+                                        <option value="{{ $cuenta->id }}">{{ $cuenta->name }} · {{ $cuenta->plan->name }} ({{ $cuenta->plan->formatMoney($cuenta->balance) }})</option>
+                                    @endforeach
+                                </select>
+                                @error('fromCuentaId')
+                                    <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                                @enderror
+                            </div>
+                            <div>
+                                <label for="transfer-to" class="mb-1.5 block text-sm font-medium text-slate-700">Llega a</label>
+                                <select id="transfer-to" wire:model.live="toCuentaId" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 focus:border-forest focus:bg-white focus:ring-4">
+                                    <option value="">Elegir cuenta</option>
+                                    @foreach ($this->allCuentas as $cuenta)
+                                        <option value="{{ $cuenta->id }}">{{ $cuenta->name }} · {{ $cuenta->plan->name }} ({{ $cuenta->plan->currency }})</option>
+                                    @endforeach
+                                </select>
+                                @error('toCuentaId')
+                                    <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                                @enderror
+                            </div>
+                            <div>
+                                <label for="transfer-amount" class="mb-1.5 block text-sm font-medium text-slate-700">Monto de origen</label>
+                                <input id="transfer-amount" type="text" inputmode="decimal" wire:model.live="transferAmount" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 focus:border-forest focus:bg-white focus:ring-4">
+                                @error('transferAmount')
+                                    <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                                @enderror
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label for="transfer-month" class="mb-1.5 block text-sm font-medium text-slate-700">Mes del ingreso</label>
+                                    <select id="transfer-month" wire:model="transferMonth" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 focus:border-forest focus:bg-white focus:ring-4">
+                                        <option value="1">Enero</option>
+                                        <option value="2">Febrero</option>
+                                        <option value="3">Marzo</option>
+                                        <option value="4">Abril</option>
+                                        <option value="5">Mayo</option>
+                                        <option value="6">Junio</option>
+                                        <option value="7">Julio</option>
+                                        <option value="8">Agosto</option>
+                                        <option value="9">Septiembre</option>
+                                        <option value="10">Octubre</option>
+                                        <option value="11">Noviembre</option>
+                                        <option value="12">Diciembre</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="transfer-year" class="mb-1.5 block text-sm font-medium text-slate-700">Año</label>
+                                    <input id="transfer-year" type="number" wire:model="transferYear" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 focus:border-forest focus:bg-white focus:ring-4">
+                                </div>
+                            </div>
+                            @if ($this->transferPreview)
+                                <p class="rounded-xl bg-mint/70 px-3 py-2 text-sm text-forest">{{ $this->transferPreview }}</p>
+                            @endif
+                            <button type="submit" class="rounded-xl bg-forest px-4 py-2.5 text-sm font-semibold text-white shadow-sm">Transferir</button>
+                        </form>
+                        <button type="button" wire:click="closeTransfer" class="mt-4 text-sm text-slate-500">Cerrar</button>
                     </section>
                 </div>
             @endteleport

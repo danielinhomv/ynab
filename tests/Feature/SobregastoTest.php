@@ -60,7 +60,7 @@ class SobregastoTest extends TestCase
             ->assertSee('Bs 151,00')
             ->assertSeeHtml('bg-red-50/70')
             ->assertSeeHtml('text-red-600')
-            ->assertSeeHtml('openCover('.$problem->id.')')
+            ->assertDontSeeHtml('openCover('.$problem->id.')')
             ->assertDontSee('Resolver ahora')
             ->assertDontSee('Cubrir sobregiro')
             ->call('edit', $problem->id)
@@ -92,16 +92,10 @@ class SobregastoTest extends TestCase
             ->assertSee('Bs 50,50')
             ->assertSeeHtml('border-red-100')
             ->assertSeeHtml('bg-forest')
-            ->assertSeeHtml('chooseSource('.$source->id.')')
-            ->assertDontSeeHtml('chooseSource('.$problem->id.')')
-            ->assertDontSeeHtml('chooseSource('.$foreign->id.')')
+            ->assertSeeHtml('coverTakes.')
+            ->assertDontSee('Ajeno')
             ->assertDontSee('Dinero por asignar')
             ->assertDontSee('Resolver ahora')
-            ->assertDontSeeHtml('<input')
-            ->call('chooseSource', $foreign->id)
-            ->assertSet('sourceSobreId', null)
-            ->call('chooseSource', $problem->id)
-            ->assertSet('sourceSobreId', null)
             ->call('closeCover')
             ->assertDontSee('Cubrir sobregiro');
 
@@ -124,7 +118,6 @@ class SobregastoTest extends TestCase
 
         Livewire::test('plan-sobres')
             ->call('openCover', $problem->id)
-            ->call('chooseSource', $source->id)
             ->call('confirmCover')
             ->assertNoRedirect()
             ->assertSee('sobre cubierto exitosamente');
@@ -136,8 +129,8 @@ class SobregastoTest extends TestCase
         $this->assertSame('0.00', $sourceMonth->assigned);
         $this->assertSame('150.50', $problemMonth->activity);
         $this->assertSame('0.00', $sourceMonth->activity);
-        $this->assertSame('-50.50', $problemMonth->available);
-        $this->assertSame('40.00', $sourceMonth->available);
+        $this->assertSame('0.00', $problemMonth->available);
+        $this->assertSame('0.00', $sourceMonth->available);
         $this->assertIsString($problemMonth->assigned);
         $this->assertIsString($sourceMonth->assigned);
         $this->assertSame('10.00', $otherMonth->fresh()->assigned);
@@ -154,45 +147,153 @@ class SobregastoTest extends TestCase
 
         Livewire::test('plan-sobres')
             ->call('openCover', $problem->id)
-            ->call('chooseSource', $source->id)
             ->call('confirmCover')
             ->assertSee('sobre cubierto exitosamente')
             ->assertDontSee('Sobregiro')
             ->assertDontSeeHtml('bg-red-50/70')
-            ->assertDontSeeHtml('text-red-600');
+            ->assertDontSeeHtml('text-right text-sm font-medium text-red-600');
 
-        $this->get('/')->assertOk()->assertSee('Dinero por asignar')->assertSee('Bs 1.250,00');
+        $this->get('/')
+            ->assertOk()
+            ->assertSee('Dinero por asignar')
+            ->assertSee('-Bs 150,50')
+            ->assertDontSee('Bs 1.250,00');
 
         $alone = $this->aloneOverspent();
 
         Livewire::actingAs($alone['user'])->test('plan-sobres')
+            ->assertSee('Sobregiro')
+            ->assertDontSeeHtml('openCover('.$alone['sobre']->id.')')
             ->call('openCover', $alone['sobre']->id)
-            ->assertSee('No hay otro sobre.')
-            ->assertDontSeeHtml('confirmCover');
+            ->assertDontSee('Cubrir sobregiro');
 
         $this->assertSame('20.00', $alone['sobre']->meses()->first()->assigned);
 
         $short = $this->shortSource();
 
         Livewire::actingAs($short['user'])->test('plan-sobres')
+            ->assertSee('Sobregiro')
+            ->assertDontSeeHtml('openCover('.$short['problem']->id.')')
             ->call('openCover', $short['problem']->id)
-            ->call('chooseSource', $short['source']->id)
-            ->call('confirmCover')
-            ->assertSee('No alcanza para cubrir.')
-            ->assertSee('Sobregiro');
+            ->assertDontSee('Cubrir sobregiro');
 
         $this->assertSame('100.00', $short['problem']->meses()->first()->assigned);
         $this->assertSame('10.00', $short['source']->meses()->first()->assigned);
         $this->assertSame('-40.00', $short['problem']->meses()->first()->available);
-
-        Livewire::actingAs($short['user'])->test('plan-sobres')
-            ->call('openCover', $short['problem']->id)
-            ->call('chooseSource', $short['empty']->id)
-            ->call('confirmCover')
-            ->assertSee('No alcanza para cubrir.');
-
         $this->assertSame(0, $short['empty']->meses()->count());
-        $this->assertSame('100.00', $short['problem']->meses()->first()->assigned);
+    }
+
+    public function test_cover_splits_across_sobres_and_rejects_an_over_total(): void
+    {
+        $user = User::factory()->create();
+        $plan = Plan::factory()->for($user)->create([
+            'currency' => 'BOB',
+            'number_format' => '1.234,56',
+            'currency_placement' => 'antes',
+        ]);
+        $category = Category::factory()->for($plan)->create();
+        $problem = Sobre::factory()->for($category)->create(['name' => 'Mercado']);
+        $one = Sobre::factory()->for($category)->create(['name' => 'Uno']);
+        $two = Sobre::factory()->for($category)->create(['name' => 'Dos']);
+        SobreMes::factory()->for($problem)->create([
+            'anio' => (int) now()->year,
+            'mes' => (int) now()->month,
+            'assigned' => '100.00',
+            'activity' => '160.00',
+            'available' => '0.00',
+        ]);
+        SobreMes::factory()->for($one)->create([
+            'anio' => (int) now()->year,
+            'mes' => (int) now()->month,
+            'assigned' => '30.00',
+        ]);
+        SobreMes::factory()->for($two)->create([
+            'anio' => (int) now()->year,
+            'mes' => (int) now()->month,
+            'assigned' => '40.00',
+        ]);
+
+        $this->actingAs($user);
+
+        $component = Livewire::test('plan-sobres')
+            ->assertSeeHtml('openCover('.$problem->id.')')
+            ->call('openCover', $problem->id)
+            ->assertSee('Falta:')
+            ->assertSee('Cubierto:')
+            ->assertSee('Dejas este sobre en 0.')
+            ->set('coverTakes.'.$one->id, '40,00')
+            ->assertSee('El valor no es válido.')
+            ->set('coverTakes.'.$one->id, '30,00')
+            ->set('coverTakes.'.$two->id, '40,00')
+            ->assertSee('Te estás pasando del monto a cubrir.')
+            ->call('confirmCover')
+            ->assertSee('Te estás pasando del monto a cubrir.');
+
+        $this->assertSame('100.00', $problem->meses()->first()->assigned);
+
+        $component
+            ->set('coverTakes.'.$two->id, '30,00')
+            ->call('confirmCover')
+            ->assertSee('sobre cubierto exitosamente');
+
+        $this->assertSame('160.00', $problem->meses()->first()->assigned);
+        $this->assertSame('0.00', $one->meses()->first()->assigned);
+        $this->assertSame('10.00', $two->meses()->first()->assigned);
+        $this->assertSame('0.00', $problem->meses()->first()->available);
+        $this->assertSame('0.00', $one->meses()->first()->available);
+        $this->assertSame('10.00', $two->meses()->first()->available);
+    }
+
+    public function test_cover_uses_unspent_available_and_hides_a_spent_source(): void
+    {
+        $user = User::factory()->create();
+        $plan = Plan::factory()->for($user)->create([
+            'currency' => 'BOB',
+            'number_format' => '1.234,56',
+            'currency_placement' => 'antes',
+        ]);
+        $category = Category::factory()->for($plan)->create(['name' => 'educacion']);
+        $problem = Sobre::factory()->for($category)->create(['name' => 'material escolar']);
+        $spent = Sobre::factory()->for($category)->create(['name' => 'colegio']);
+        $open = Sobre::factory()->for($category)->create(['name' => 'universidad']);
+        SobreMes::factory()->for($problem)->create([
+            'anio' => (int) now()->year,
+            'mes' => (int) now()->month,
+            'assigned' => '500.00',
+            'activity' => '600.00',
+            'available' => '-100.00',
+        ]);
+        SobreMes::factory()->for($spent)->create([
+            'anio' => (int) now()->year,
+            'mes' => (int) now()->month,
+            'assigned' => '1000.00',
+            'activity' => '1000.00',
+            'available' => '0.00',
+        ]);
+        SobreMes::factory()->for($open)->create([
+            'anio' => (int) now()->year,
+            'mes' => (int) now()->month,
+            'assigned' => '2000.00',
+            'activity' => '100.00',
+            'available' => '1900.00',
+        ]);
+
+        $this->actingAs($user);
+
+        Livewire::test('plan-sobres')
+            ->call('openCover', $problem->id)
+            ->assertSee('Cubrir sobregiro')
+            ->assertSee('tiene Bs 1.900,00')
+            ->assertDontSee('tiene Bs 1.000,00')
+            ->assertDontSee('tiene Bs 2.000,00')
+            ->call('confirmCover')
+            ->assertSee('sobre cubierto exitosamente');
+
+        $this->assertSame('600.00', $problem->meses()->first()->assigned);
+        $this->assertSame('0.00', $problem->meses()->first()->available);
+        $this->assertSame('1000.00', $spent->meses()->first()->assigned);
+        $this->assertSame('1900.00', $open->meses()->first()->assigned);
+        $this->assertSame('1800.00', $open->meses()->first()->available);
     }
 
     /**

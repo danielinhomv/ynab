@@ -165,6 +165,35 @@ class CuentaListTest extends TestCase
         $this->assertFalse(Schema::hasColumn('cuentas', 'bank_name'));
     }
 
+    public function test_accounts_follow_the_opened_plan(): void
+    {
+        $user = User::factory()->create();
+        $older = Plan::factory()->for($user)->create();
+        $latest = Plan::factory()->for($user)->create();
+        Cuenta::factory()->for($older)->create(['name' => 'Caja vieja']);
+        Cuenta::factory()->for($latest)->create(['name' => 'Caja nueva']);
+
+        $this->actingAs($user);
+
+        Livewire::test('plan-accounts')
+            ->assertSee('Caja nueva')
+            ->assertDontSee('Caja vieja')
+            ->call('abrirPlan', $older->id)
+            ->assertSee('Caja vieja')
+            ->assertDontSee('Caja nueva')
+            ->call('openPopup')
+            ->call('chooseType', 'indefinida')
+            ->set('name', 'Caja extra')
+            ->set('moneySource', 'Efectivo')
+            ->set('balance', '5,00')
+            ->call('save')
+            ->assertSee('cuenta creada exitosamente');
+
+        $this->assertSame(2, $older->cuentas()->count());
+        $this->assertSame(1, $latest->cuentas()->count());
+        $this->assertTrue($older->cuentas()->where('name', 'Caja extra')->exists());
+    }
+
     public function test_invalid_popup_values_do_not_create_an_account(): void
     {
         $user = User::factory()->create();

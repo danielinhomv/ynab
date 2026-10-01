@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\Category;
+use App\Models\Cuenta;
+use App\Models\Gasto;
 use App\Models\Plan;
 use App\Models\Sobre;
 use App\Models\SobreMes;
@@ -132,6 +134,10 @@ class PlanSobresTest extends TestCase
             'activity' => '1.00',
             'available' => '9.00',
         ]);
+        $cuenta = Cuenta::factory()->for($latest)->create([
+            'name' => 'Caja',
+            'balance' => '50.00',
+        ]);
         $olderSobre = Sobre::factory()->for(Category::factory()->for($older))->create([
             'name' => 'Viejo',
             'assigned' => '5.00',
@@ -153,7 +159,8 @@ class PlanSobresTest extends TestCase
             ->assertSet('editingId', $sobre->id)
             ->set('name', 'Luz cocina')
             ->set('assigned', '20,50')
-            ->set('activity', '3,00')
+            ->set('gasto', '3,00')
+            ->set('gastoCuentaId', $cuenta->id)
             ->set('available', '-2,50')
             ->call('save')
             ->assertSet('editingId', null)
@@ -167,8 +174,9 @@ class PlanSobresTest extends TestCase
         $this->assertSame('10.00', $sobre->assigned);
         $this->assertSame('20.50', $mes->assigned);
         $this->assertSame('3.00', $mes->activity);
-        $this->assertSame('-2.50', $mes->available);
-        $this->assertIsString($mes->assigned);
+        $this->assertSame('17.50', $mes->available);
+        $this->assertSame('47.00', $cuenta->fresh()->balance);
+        $this->assertSame('3.00', Gasto::query()->where('cuenta_id', $cuenta->id)->value('monto'));
 
         Livewire::test('plan-sobres')
             ->call('abrirPlan', $latest->id)
@@ -188,5 +196,109 @@ class PlanSobresTest extends TestCase
 
         $this->assertSame('8.00', $foreign->fresh()->assigned);
         $this->assertSame('5.00', $olderSobre->fresh()->assigned);
+    }
+
+    public function test_nuevo_gasto_adds_to_the_month_activity(): void
+    {
+        $user = User::factory()->create();
+        $plan = Plan::factory()->for($user)->create([
+            'currency' => 'BOB',
+            'number_format' => '1.234,56',
+            'currency_placement' => 'antes',
+        ]);
+        $sobre = Sobre::factory()->for(Category::factory()->for($plan))->create(['name' => 'Comida']);
+        $cuenta = Cuenta::factory()->for($plan)->create([
+            'name' => 'Caja',
+            'balance' => '1500.00',
+        ]);
+        SobreMes::factory()->for($sobre)->create([
+            'anio' => (int) now()->year,
+            'mes' => (int) now()->month,
+            'assigned' => '2000.00',
+            'activity' => '2000.00',
+            'available' => '0.00',
+        ]);
+
+        $this->actingAs($user);
+
+        Livewire::test('plan-sobres')
+            ->call('edit', $sobre->id)
+            ->set('gasto', '1000,00')
+            ->set('gastoCuentaId', $cuenta->id)
+            ->call('save')
+            ->assertHasNoErrors()
+            ->assertSet('editingId', null);
+
+        $mes = $sobre->meses()->first();
+
+        $this->assertSame('3000.00', $mes->activity);
+        $this->assertSame('2000.00', $mes->assigned);
+        $this->assertSame('-1000.00', $mes->available);
+        $this->assertSame('500.00', $cuenta->fresh()->balance);
+        $this->assertSame(1, Gasto::query()->count());
+
+        Livewire::test('plan-sobres')
+            ->call('edit', $sobre->id)
+            ->set('gasto', '-1,00')
+            ->call('save')
+            ->assertSee('El valor no es válido.');
+
+        $this->assertSame('3000.00', $sobre->meses()->first()->activity);
+    }
+
+    public function test_sobre_amounts_accept_calculator_expressions_and_reject_a_negative_result(): void
+    {
+        $user = User::factory()->create();
+        $plan = Plan::factory()->for($user)->create([
+            'currency' => 'BOB',
+            'number_format' => '1.234,56',
+            'currency_placement' => 'antes',
+        ]);
+        $sobre = Sobre::factory()->for(Category::factory()->for($plan))->create(['name' => 'Comida']);
+        $cuenta = Cuenta::factory()->for($plan)->create([
+            'name' => 'Caja',
+            'balance' => '50.00',
+        ]);
+        SobreMes::factory()->for($sobre)->create([
+            'anio' => (int) now()->year,
+            'mes' => (int) now()->month,
+            'assigned' => '10.00',
+            'activity' => '0.00',
+            'available' => '10.00',
+        ]);
+
+        $this->actingAs($user);
+
+        Livewire::test('plan-sobres')
+            ->call('edit', $sobre->id)
+            ->set('assigned', '10+5')
+            ->set('available', '20-5')
+            ->call('save')
+            ->assertHasNoErrors()
+            ->assertSet('editingId', null);
+
+        $mes = $sobre->meses()->first();
+
+        $this->assertSame('15.00', $mes->assigned);
+        $this->assertSame('15.00', $mes->available);
+
+        Livewire::test('plan-sobres')
+            ->call('edit', $sobre->id)
+            ->set('gasto', '4*2')
+            ->set('gastoCuentaId', $cuenta->id)
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $this->assertSame('8.00', $sobre->meses()->first()->activity);
+        $this->assertSame('42.00', $cuenta->fresh()->balance);
+
+        Livewire::test('plan-sobres')
+            ->call('edit', $sobre->id)
+            ->set('assigned', '10-20')
+            ->call('save')
+            ->assertSee('El valor no es válido.')
+            ->assertSet('editingId', $sobre->id);
+
+        $this->assertSame('15.00', $sobre->meses()->first()->assigned);
     }
 }

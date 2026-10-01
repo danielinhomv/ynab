@@ -1,8 +1,12 @@
 <?php
 
+use App\Models\Cuenta;
+use App\Models\Gasto;
+use App\Models\Ingreso;
 use App\Models\Plan;
 use App\Models\Sobre;
 use App\Models\SobreMes;
+use App\Services\AmountExpression;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +23,10 @@ new class extends Component
     public string $assigned = '';
 
     public string $activity = '';
+
+    public string $gasto = '';
+
+    public ?int $gastoCuentaId = null;
 
     public string $available = '';
 
@@ -40,7 +48,8 @@ new class extends Component
 
     public ?int $coverSobreId = null;
 
-    public ?int $sourceSobreId = null;
+    /** @var array<string, string> */
+    public array $coverTakes = [];
 
     public string $coverMessage = '';
 
@@ -54,10 +63,7 @@ new class extends Component
 
         $this->year = (int) now()->year;
         $this->month = (int) now()->month;
-
-        if ($user->plans()->count() === 1) {
-            $this->planId = (int) $user->plans()->value('id');
-        }
+        $this->planId = $user->plans()->latest('id')->value('id');
     }
 
     #[Computed]
@@ -76,7 +82,7 @@ new class extends Component
         }
 
         return $user->plans()
-            ->with(['categories.sobres.meses'])
+            ->with(['categories.sobres.meses', 'cuentas'])
             ->whereKey($this->planId)
             ->first();
     }
@@ -102,6 +108,139 @@ new class extends Component
         return ($names[$this->month] ?? '').' '.$this->year;
     }
 
+    #[Computed]
+    public function moneyToAssign(): string
+    {
+        $plan = $this->plan;
+
+        if ($plan === null || $this->month < 1) {
+            return '0.00';
+        }
+
+        $visibleKey = sprintf('%04d-%02d', $this->year, $this->month);
+        $income = [];
+        $budgeted = [];
+
+        $ingresos = Ingreso::query()
+            ->whereHas('cuenta', fn ($query) => $query->where('plan_id', $plan->id))
+            ->where('fecha', '<', Carbon::create($this->year, $this->month, 1)->addMonth()->toDateString())
+            ->get(['fecha', 'monto']);
+
+        foreach ($ingresos as $ingreso) {
+            $key = $ingreso->fecha->format('Y-m');
+            $income[$key] = bcadd($income[$key] ?? '0.00', $ingreso->monto, 2);
+        }
+
+        $meses = SobreMes::query()
+            ->whereHas('sobre.category', fn ($query) => $query->where('plan_id', $plan->id))
+            ->where(fn ($query) => $query
+                ->where('anio', '<', $this->year)
+                ->orWhere(fn ($query) => $query->where('anio', $this->year)->where('mes', '<=', $this->month)))
+            ->get(['anio', 'mes', 'assigned']);
+
+        foreach ($meses as $mes) {
+            $key = sprintf('%04d-%02d', $mes->anio, $mes->mes);
+            $budgeted[$key] = bcadd($budgeted[$key] ?? '0.00', $mes->assigned, 2);
+        }
+
+        $carriedDeficit = '0.00';
+
+        foreach (array_unique([...array_keys($income), ...array_keys($budgeted)]) as $key) {
+            if ($key >= $visibleKey) {
+                continue;
+            }
+
+            $deficit = bcsub($budgeted[$key] ?? '0.00', $income[$key] ?? '0.00', 2);
+
+            if (bccomp($deficit, '0.00', 2) > 0) {
+                $carriedDeficit = bcadd($carriedDeficit, $deficit, 2);
+            }
+        }
+
+        $ownTotal = bcsub($income[$visibleKey] ?? '0.00', $budgeted[$visibleKey] ?? '0.00', 2);
+
+        return bcsub($ownTotal, $carriedDeficit, 2);
+    }
+
+    /**
+     * @return array{income: string, budgeted: string, spent: string, incomeCount: int, sobreCount: int}
+     */
+    #[Computed]
+    public function monthTotals(): array
+    {
+        $empty = [
+            'income' => '0.00',
+            'budgeted' => '0.00',
+            'spent' => '0.00',
+            'incomeCount' => 0,
+            'sobreCount' => 0,
+        ];
+        $plan = $this->plan;
+
+        if ($plan === null || $this->month < 1) {
+            return $empty;
+        }
+
+        $start = Carbon::create($this->year, $this->month, 1);
+        $ingresos = Ingreso::query()
+            ->whereHas('cuenta', fn ($query) => $query->where('plan_id', $plan->id))
+            ->where('fecha', '>=', $start->toDateString())
+            ->where('fecha', '<', $start->copy()->addMonth()->toDateString())
+            ->get(['monto']);
+
+        $income = '0.00';
+
+        foreach ($ingresos as $ingreso) {
+            $income = bcadd($income, $ingreso->monto, 2);
+        }
+
+        $rows = SobreMes::query()
+            ->whereHas('sobre.category', fn ($query) => $query->where('plan_id', $plan->id))
+            ->where('anio', $this->year)
+            ->where('mes', $this->month)
+            ->get(['assigned', 'activity']);
+
+        $budgeted = '0.00';
+        $spent = '0.00';
+
+        foreach ($rows as $row) {
+            $budgeted = bcadd($budgeted, $row->assigned, 2);
+            $spent = bcadd($spent, $row->activity, 2);
+        }
+
+        return [
+            'income' => $income,
+            'budgeted' => $budgeted,
+            'spent' => $spent,
+            'incomeCount' => $ingresos->count(),
+            'sobreCount' => Sobre::query()
+                ->whereHas('category', fn ($query) => $query->where('plan_id', $plan->id))
+                ->count(),
+        ];
+    }
+
+    public function spentPercentLabel(): string
+    {
+        $totals = $this->monthTotals;
+
+        if (bccomp($totals['budgeted'], '0.00', 2) <= 0) {
+            return '0,0% del presupuesto';
+        }
+
+        $percent = bcmul(bcdiv($totals['spent'], $totals['budgeted'], 4), '100', 1);
+
+        return str_replace('.', ',', $percent).'% del presupuesto';
+    }
+
+    public function budgetMetaLabel(): string
+    {
+        $totals = $this->monthTotals;
+        $deposits = $totals['incomeCount'] === 1 ? 'depósito recibido' : 'depósitos recibidos';
+        $sobres = $totals['sobreCount'] === 1 ? 'sobre activo' : 'sobres activos';
+
+        return $totals['incomeCount'].' '.$deposits.' · '.$totals['sobreCount'].' '.$sobres;
+    }
+
     #[On('plan-abierto')]
     public function abrirPlan(int $planId): void
     {
@@ -119,6 +258,12 @@ new class extends Component
 
         $this->planId = $plan->id;
         $this->editingId = null;
+        unset($this->plan);
+    }
+
+    #[On('saldos-cambiaron')]
+    public function refreshTotals(): void
+    {
         unset($this->plan);
     }
 
@@ -148,6 +293,8 @@ new class extends Component
         $this->assigned = $plan->amountForInput($row->assigned ?? '0.00');
         $this->activity = $plan->amountForInput($row->activity ?? '0.00');
         $this->available = $plan->amountForInput($row->available ?? '0.00');
+        $this->gasto = '';
+        $this->gastoCuentaId = $plan->cuentas->first()?->id;
         $this->resetValidation();
     }
 
@@ -161,57 +308,130 @@ new class extends Component
 
         $this->name = trim($this->name);
         $this->assigned = trim($this->assigned);
-        $this->activity = trim($this->activity);
         $this->available = trim($this->available);
+        $this->gasto = trim($this->gasto);
 
         $this->validate([
             'name' => ['required', 'string', 'max:255'],
             'assigned' => ['required', 'string', 'max:255'],
-            'activity' => ['required', 'string', 'max:255'],
             'available' => ['required', 'string', 'max:255'],
+            'gasto' => ['nullable', 'string', 'max:255'],
+            'gastoCuentaId' => ['nullable', 'integer'],
         ], [
             'name.required' => 'El nombre es obligatorio.',
             'assigned.required' => 'El valor no es válido.',
-            'activity.required' => 'El valor no es válido.',
             'available.required' => 'El valor no es válido.',
         ]);
 
         $assigned = $this->normalizedAmount($this->assigned);
-        $activity = $this->normalizedAmount($this->activity);
         $available = $this->normalizedAmount($this->available);
+        $gasto = $this->gasto === '' ? '0.00' : $this->normalizedAmount($this->gasto);
 
         if ($assigned === null) {
             $this->addError('assigned', 'El valor no es válido.');
-        }
-
-        if ($activity === null) {
-            $this->addError('activity', 'El valor no es válido.');
         }
 
         if ($available === null) {
             $this->addError('available', 'El valor no es válido.');
         }
 
-        if ($assigned === null || $activity === null || $available === null) {
+        if ($this->gasto !== '' && ($gasto === null || str_starts_with($gasto, '-'))) {
+            $this->addError('gasto', 'El valor no es válido.');
+            $gasto = null;
+        }
+
+        $cuenta = null;
+
+        if ($this->gasto !== '' && $gasto !== null) {
+            $cuenta = $this->ownedPlanCuenta($this->gastoCuentaId);
+
+            if ($cuenta === null) {
+                $this->addError('gastoCuentaId', 'El valor no es válido.');
+            } elseif (bccomp($cuenta->balance, $gasto, 2) < 0) {
+                $this->addError('gastoCuentaId', 'No alcanza en la cuenta.');
+                $cuenta = null;
+            }
+        }
+
+        if ($assigned === null || $available === null || ($this->gasto !== '' && ($gasto === null || $cuenta === null))) {
             return;
         }
 
-        $sobre->update([
-            'name' => $this->name,
-        ]);
+        $currentActivity = $this->monthRow($sobre)?->activity ?? '0.00';
+        $activity = bcadd($currentActivity, $gasto, 2);
 
-        $sobre->meses()->updateOrCreate(
-            ['anio' => $this->year, 'mes' => $this->month],
-            [
-                'assigned' => $assigned,
-                'activity' => $activity,
-                'available' => $available,
-            ],
-        );
+        if ($this->gasto !== '') {
+            $available = bcsub($assigned, $activity, 2);
+        }
+
+        try {
+            DB::transaction(function () use ($sobre, $assigned, $activity, $available, $cuenta, $gasto): void {
+                if ($cuenta !== null && $this->gasto !== '') {
+                    $locked = Cuenta::query()->whereKey($cuenta->id)->lockForUpdate()->first();
+
+                    if ($locked === null || bccomp($locked->balance, $gasto, 2) < 0) {
+                        throw new \RuntimeException('insufficient');
+                    }
+
+                    Gasto::query()->create([
+                        'cuenta_id' => $locked->id,
+                        'sobre_id' => $sobre->id,
+                        'anio' => $this->year,
+                        'mes' => $this->month,
+                        'monto' => $gasto,
+                    ]);
+                    $locked->update([
+                        'balance' => bcsub($locked->balance, $gasto, 2),
+                    ]);
+                }
+
+                $sobre->update([
+                    'name' => $this->name,
+                ]);
+
+                $sobre->meses()->updateOrCreate(
+                    ['anio' => $this->year, 'mes' => $this->month],
+                    [
+                        'assigned' => $assigned,
+                        'activity' => $activity,
+                        'available' => $available,
+                    ],
+                );
+            });
+        } catch (\RuntimeException $exception) {
+            if ($exception->getMessage() !== 'insufficient') {
+                throw $exception;
+            }
+
+            $this->addError('gastoCuentaId', 'No alcanza en la cuenta.');
+
+            return;
+        }
 
         $this->editingId = null;
+        $this->gastoCuentaId = null;
         $this->resetValidation();
         unset($this->plan);
+        $this->dispatch('ingreso-guardado')->to('plan-accounts');
+    }
+
+    private function ownedPlanCuenta(?int $cuentaId): ?Cuenta
+    {
+        if ($cuentaId === null || $this->planId === null) {
+            return null;
+        }
+
+        $userId = Auth::id();
+
+        if ($userId === null) {
+            return null;
+        }
+
+        return Cuenta::query()
+            ->whereKey($cuentaId)
+            ->where('plan_id', $this->planId)
+            ->whereHas('plan', fn ($query) => $query->where('user_id', $userId))
+            ->first();
     }
 
     #[On('open-category')]
@@ -367,7 +587,7 @@ new class extends Component
         $this->month = (int) $date->month;
         $this->editingId = null;
         $this->coverSobreId = null;
-        $this->sourceSobreId = null;
+        $this->coverTakes = [];
         $this->coverMessage = '';
         unset($this->plan);
     }
@@ -387,75 +607,131 @@ new class extends Component
         return $this->plan?->formatMoney($this->fromCents(max($cents, 0))) ?? '';
     }
 
+    public function shortfallAmount(Sobre $sobre): string
+    {
+        $amounts = $this->monthValues($sobre);
+        $diff = bcsub($amounts['activity'], $amounts['assigned'], 2);
+
+        return bccomp($diff, '0.00', 2) > 0 ? $diff : '0.00';
+    }
+
+    public function availableOf(Sobre $sobre): string
+    {
+        $amounts = $this->monthValues($sobre);
+
+        return $this->positiveLeftover($amounts['assigned'], $amounts['activity']);
+    }
+
+    private function leftoverOfRow(SobreMes $row): string
+    {
+        return $this->positiveLeftover($row->assigned, $row->activity);
+    }
+
+    private function positiveLeftover(string $assigned, string $activity): string
+    {
+        $leftover = bcsub($assigned, $activity, 2);
+
+        return bccomp($leftover, '0.00', 2) > 0 ? $leftover : '0.00';
+    }
+
+    public function canCover(Sobre $sobre): bool
+    {
+        if ($this->plan === null || ! $this->rowIsOverspent($sobre)) {
+            return false;
+        }
+
+        $need = $this->shortfallAmount($sobre);
+        $pool = '0.00';
+
+        foreach ($this->otherSobres($sobre->id) as $source) {
+            $pool = bcadd($pool, $this->availableOf($source), 2);
+        }
+
+        return bccomp($pool, $need, 2) >= 0;
+    }
+
     public function openCover(int $sobreId): void
     {
         $sobre = $this->ownedSobre($sobreId);
 
-        if ($sobre === null || $this->plan === null || ! $this->rowIsOverspent($sobre)) {
+        if ($sobre === null || $this->plan === null || ! $this->rowIsOverspent($sobre) || ! $this->canCover($sobre)) {
             return;
         }
 
         $this->coverSobreId = $sobre->id;
-        $this->sourceSobreId = null;
         $this->editingId = null;
-        $this->coverMessage = $this->coverSources()->isEmpty() ? 'No hay otro sobre.' : '';
+        $this->coverMessage = '';
+        $this->fillSuggestedTakes($sobre);
     }
 
     public function closeCover(): void
     {
         $this->coverSobreId = null;
-        $this->sourceSobreId = null;
+        $this->coverTakes = [];
         $this->coverMessage = '';
-    }
-
-    public function chooseSource(int $sobreId): void
-    {
-        if ($this->coverSobreId === null || $sobreId === $this->coverSobreId) {
-            return;
-        }
-
-        $source = $this->ownedSobre($sobreId);
-
-        if ($source === null) {
-            return;
-        }
-
-        $this->sourceSobreId = $source->id;
     }
 
     public function confirmCover(): void
     {
         $problem = $this->coverSobreId === null ? null : $this->ownedSobre($this->coverSobreId);
-        $source = $this->sourceSobreId === null ? null : $this->ownedSobre($this->sourceSobreId);
 
-        if ($problem === null || $source === null || $problem->id === $source->id) {
+        if ($problem === null || $this->plan === null) {
             return;
         }
 
         $problemRow = $this->monthRow($problem);
-        $sourceRow = $this->monthRow($source);
-        $shortfall = $problemRow === null
-            ? 0
-            : $this->toCents($problemRow->activity) - $this->toCents($problemRow->assigned);
-        $sourceAssigned = $sourceRow === null ? 0 : $this->toCents($sourceRow->assigned);
+        $shortfall = $this->shortfallAmount($problem);
+        $parsed = $this->parsedCoverTakes();
 
-        if ($shortfall <= 0 || $sourceRow === null || $sourceAssigned < $shortfall) {
-            $this->coverMessage = 'No alcanza para cubrir.';
+        if ($problemRow === null || bccomp($shortfall, '0.00', 2) <= 0 || $parsed === null) {
+            $this->coverMessage = $this->coverTakesMessage() ?? 'El valor no es válido.';
 
             return;
         }
 
-        DB::transaction(function () use ($problemRow, $sourceRow, $shortfall): void {
+        $taken = '0.00';
+        $sourceRows = [];
+
+        foreach ($parsed as $sobreId => $amount) {
+            $source = $this->ownedSobre((int) $sobreId);
+            $row = $source === null ? null : $this->monthRow($source);
+
+            if ($row === null || bccomp($amount, $this->leftoverOfRow($row), 2) > 0) {
+                $this->coverMessage = 'El valor no es válido.';
+
+                return;
+            }
+
+            $taken = bcadd($taken, $amount, 2);
+            $sourceRows[] = [$row, $amount];
+        }
+
+        if (bccomp($taken, $shortfall, 2) !== 0) {
+            $this->coverMessage = bccomp($taken, $shortfall, 2) > 0
+                ? 'Te estás pasando del monto a cubrir.'
+                : 'Falta por cubrir.';
+
+            return;
+        }
+
+        DB::transaction(function () use ($problemRow, $sourceRows, $taken): void {
+            $problemAssigned = bcadd($problemRow->assigned, $taken, 2);
             $problemRow->update([
-                'assigned' => $this->fromCents($this->toCents($problemRow->assigned) + $shortfall),
+                'assigned' => $problemAssigned,
+                'available' => bcsub($problemAssigned, $problemRow->activity, 2),
             ]);
-            $sourceRow->update([
-                'assigned' => $this->fromCents($this->toCents($sourceRow->assigned) - $shortfall),
-            ]);
+
+            foreach ($sourceRows as [$row, $amount]) {
+                $sourceAssigned = bcsub($row->assigned, $amount, 2);
+                $row->update([
+                    'assigned' => $sourceAssigned,
+                    'available' => bcsub($sourceAssigned, $row->activity, 2),
+                ]);
+            }
         });
 
         $this->coverSobreId = null;
-        $this->sourceSobreId = null;
+        $this->coverTakes = [];
         $this->coverMessage = 'sobre cubierto exitosamente';
         unset($this->plan);
     }
@@ -482,11 +758,177 @@ new class extends Component
      */
     public function coverSources(): \Illuminate\Support\Collection
     {
+        if ($this->coverSobreId === null) {
+            return collect();
+        }
+
+        return $this->otherSobres($this->coverSobreId)
+            ->filter(fn (Sobre $sobre): bool => bccomp($this->availableOf($sobre), '0.00', 2) > 0)
+            ->values();
+    }
+
+    public function coverTakenTotal(): string
+    {
+        $total = '0.00';
+
+        foreach ($this->coverSources() as $source) {
+            $raw = $this->rawTake($source);
+
+            if ($raw === '') {
+                continue;
+            }
+
+            $take = $this->normalizedAmount($raw);
+
+            if ($take === null || str_starts_with($take, '-')) {
+                continue;
+            }
+
+            $total = bcadd($total, $take, 2);
+        }
+
+        return $total;
+    }
+
+    public function coverMissing(): string
+    {
+        $cover = $this->coveredSobre();
+
+        if ($cover === null) {
+            return '0.00';
+        }
+
+        $missing = bcsub($this->shortfallAmount($cover), $this->coverTakenTotal(), 2);
+
+        return bccomp($missing, '0.00', 2) > 0 ? $missing : '0.00';
+    }
+
+    public function coverIsOver(): bool
+    {
+        $cover = $this->coveredSobre();
+
+        if ($cover === null) {
+            return false;
+        }
+
+        return bccomp($this->coverTakenTotal(), $this->shortfallAmount($cover), 2) > 0;
+    }
+
+    public function emptiesSource(Sobre $source): bool
+    {
+        $raw = $this->rawTake($source);
+
+        if ($raw === '') {
+            return false;
+        }
+
+        $take = $this->normalizedAmount($raw);
+
+        return $take !== null && bccomp($take, $this->availableOf($source), 2) === 0;
+    }
+
+    public function coverLineError(Sobre $source): ?string
+    {
+        $raw = $this->rawTake($source);
+
+        if ($raw === '') {
+            return null;
+        }
+
+        $take = $this->normalizedAmount($raw);
+
+        if ($take === null || str_starts_with($take, '-') || bccomp($take, '0.00', 2) <= 0) {
+            return 'El valor no es válido.';
+        }
+
+        if (bccomp($take, $this->availableOf($source), 2) > 0) {
+            return 'El valor no es válido.';
+        }
+
+        return null;
+    }
+
+    private function rawTake(Sobre $source): string
+    {
+        $id = $source->id;
+
+        return trim((string) ($this->coverTakes[$id] ?? $this->coverTakes[(string) $id] ?? ''));
+    }
+
+    private function fillSuggestedTakes(Sobre $problem): void
+    {
+        $remaining = $this->shortfallAmount($problem);
+        $takes = [];
+
+        foreach ($this->coverSources()->sort(fn (Sobre $a, Sobre $b): int => bccomp($this->availableOf($b), $this->availableOf($a), 2)) as $source) {
+            if (bccomp($remaining, '0.00', 2) <= 0) {
+                $takes[$source->id] = '';
+
+                continue;
+            }
+
+            $avail = $this->availableOf($source);
+            $take = bccomp($remaining, $avail, 2) >= 0 ? $avail : $remaining;
+            $takes[$source->id] = $this->plan->amountForInput($take);
+            $remaining = bcsub($remaining, $take, 2);
+        }
+
+        $this->coverTakes = $takes;
+    }
+
+    /**
+     * @return array<string, string>|null
+     */
+    private function parsedCoverTakes(): ?array
+    {
+        $parsed = [];
+
+        foreach ($this->coverSources() as $source) {
+            $raw = $this->rawTake($source);
+
+            if ($raw === '') {
+                continue;
+            }
+
+            if ($this->coverLineError($source) !== null) {
+                return null;
+            }
+
+            $parsed[(string) $source->id] = $this->normalizedAmount($raw);
+        }
+
+        return $parsed;
+    }
+
+    private function coverTakesMessage(): ?string
+    {
+        if ($this->coverIsOver()) {
+            return 'Te estás pasando del monto a cubrir.';
+        }
+
+        foreach ($this->coverSources() as $source) {
+            if ($this->coverLineError($source) !== null) {
+                return 'El valor no es válido.';
+            }
+        }
+
+        if (bccomp($this->coverMissing(), '0.00', 2) > 0) {
+            return 'Falta por cubrir.';
+        }
+
+        return null;
+    }
+
+    /**
+     * @return \Illuminate\Support\Collection<int, Sobre>
+     */
+    private function otherSobres(int $exceptId): \Illuminate\Support\Collection
+    {
         $sobres = collect();
 
         foreach ($this->plan?->categories ?? [] as $category) {
             foreach ($category->sobres as $sobre) {
-                if ($sobre->id !== $this->coverSobreId) {
+                if ($sobre->id !== $exceptId) {
                     $sobres->push($sobre);
                 }
             }
@@ -540,42 +982,7 @@ new class extends Component
 
     private function normalizedAmount(string $value): ?string
     {
-        $negative = str_starts_with($value, '-');
-
-        if ($negative) {
-            $value = substr($value, 1);
-        }
-
-        if ($value === '' || str_contains($value, '-')) {
-            return null;
-        }
-
-        if ($this->plan?->number_format === '1,234.56') {
-            if (! preg_match('/^(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d{1,2})?$/', $value)) {
-                return null;
-            }
-
-            $value = str_replace(',', '', $value);
-        } elseif (! preg_match('/^(?:\d{1,3}(?:\.\d{3})*|\d+)(?:,\d{1,2})?$/', $value)) {
-            return null;
-        } else {
-            $value = str_replace('.', '', $value);
-            $value = str_replace(',', '.', $value);
-        }
-
-        [$whole, $fraction] = array_pad(explode('.', $value, 2), 2, '00');
-
-        if ($fraction === '') {
-            $fraction = '00';
-        }
-
-        if (! ctype_digit($whole) || ! ctype_digit($fraction) || strlen($fraction) > 2) {
-            return null;
-        }
-
-        $normalized = $whole.'.'.str_pad($fraction, 2, '0');
-
-        return $negative ? '-'.$normalized : $normalized;
+        return (new AmountExpression)->evaluate($value, $this->plan?->number_format ?? '1.234,56');
     }
 };
 ?>
@@ -583,13 +990,63 @@ new class extends Component
 <div>
     @if (auth()->check())
         @teleport('#mes-controles')
-            <button type="button" wire:click="previousMonth" aria-label="Mes anterior" class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-sm font-semibold text-forest shadow-sm ring-1 ring-emerald-100">‹</button>
-            <h1 class="text-xl font-semibold tracking-tight sm:text-2xl">{{ $this->monthTitle }}</h1>
-            <button type="button" wire:click="nextMonth" aria-label="Mes siguiente" class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-sm font-semibold text-forest shadow-sm ring-1 ring-emerald-100">›</button>
+            <div class="flex items-center gap-2">
+                <button type="button" wire:click="previousMonth" aria-label="Mes anterior" class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-sm font-semibold text-forest shadow-sm ring-1 ring-emerald-100">‹</button>
+                <h1 class="text-xl font-semibold tracking-tight sm:text-2xl">{{ $this->monthTitle }}</h1>
+                <button type="button" wire:click="nextMonth" aria-label="Mes siguiente" class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-sm font-semibold text-forest shadow-sm ring-1 ring-emerald-100">›</button>
+            </div>
+        @endteleport
+
+        @teleport('#dinero-por-asignar')
+            <div>
+                @if ($this->plan !== null)
+                    <p @class([
+                        'text-3xl font-semibold tracking-tight',
+                        'text-red-600' => str_starts_with($this->moneyToAssign, '-'),
+                        'text-slate-900' => ! str_starts_with($this->moneyToAssign, '-'),
+                    ])>{{ $this->plan->formatMoney($this->moneyToAssign) }}</p>
+                @endif
+            </div>
+        @endteleport
+
+        @teleport('#ingresos-del-mes')
+            <div>
+                @if ($this->plan !== null)
+                    <p class="text-xl font-semibold text-slate-900">{{ $this->plan->formatMoney($this->monthTotals['income']) }}</p>
+                @endif
+            </div>
+        @endteleport
+
+        @teleport('#presupuestado-del-mes')
+            <div>
+                @if ($this->plan !== null)
+                    <p class="text-xl font-semibold text-slate-900">{{ $this->plan->formatMoney($this->monthTotals['budgeted']) }}</p>
+                    <p class="mt-1 text-[11px] text-slate-400">{{ $this->budgetMetaLabel() }}</p>
+                @endif
+            </div>
+        @endteleport
+
+        @teleport('#gastado-del-mes')
+            <div>
+                @if ($this->plan !== null)
+                    <p class="text-xl font-semibold text-slate-900">{{ $this->plan->formatMoney($this->monthTotals['spent']) }}</p>
+                    <p class="mt-1 text-[11px] text-slate-400">{{ $this->spentPercentLabel() }}</p>
+                @endif
+            </div>
+        @endteleport
+
+        @teleport('#moneda-plan')
+            <div>
+                @if ($this->plan !== null)
+                    <a href="{{ route('plan.configuracion', $this->plan) }}" class="text-xs text-slate-500 underline-offset-2 hover:text-forest hover:underline">Moneda del plan: Bolivianos (Bs.)</a>
+                @else
+                    <p class="text-xs text-slate-500">Moneda del plan: Bolivianos (Bs.)</p>
+                @endif
+            </div>
         @endteleport
 
         <section class="relative mt-5 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-emerald-100">
-            <div class="grid grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))] gap-2 border-b border-slate-100 px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400 sm:px-5">
+            <div class="grid grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))] gap-2 border-b border-emerald-100 bg-mint/40 px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-forest sm:px-5">
                 <p>Categoría / Sobre</p>
                 <p class="text-right">Asignado</p>
                 <p class="text-right">Actividad</p>
@@ -597,20 +1054,18 @@ new class extends Component
             </div>
 
             @forelse ($this->plan?->categories ?? [] as $category)
-                <div class="border-b border-slate-100 bg-mint/50 px-4 py-2.5 sm:px-5">
-                    <p class="text-sm font-semibold text-slate-800">{{ $category->name }}</p>
+                <div class="border-b border-emerald-100 bg-mint/80 px-4 py-2.5 sm:px-5">
+                    <p class="text-sm font-semibold text-forest">{{ $category->name }}</p>
                 </div>
-                <div class="divide-y divide-slate-50">
+                <div class="divide-y divide-emerald-50">
                     @foreach ($category->sobres as $sobre)
                         @php
                             $amounts = $this->monthValues($sobre);
                             $overspent = $this->rowIsOverspent($sobre);
                         @endphp
                         @if ($editingId === $sobre->id)
-                            <form wire:submit="save" @class([
-                                'grid grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))] items-start gap-2 px-4 py-3 sm:px-5',
-                                'bg-red-50/70' => $overspent,
-                            ])>
+                            <form wire:submit="save" @class(['bg-red-50/70' => $overspent])>
+                                <div class="grid grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))] items-start gap-2 px-4 py-3 sm:px-5">
                                 <div>
                                     <input type="text" wire:model="name" aria-label="Nombre" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-forest/20 focus:border-forest focus:ring-4">
                                     @error('name')
@@ -618,25 +1073,39 @@ new class extends Component
                                     @enderror
                                 </div>
                                 <div>
-                                    <input type="text" wire:model="assigned" inputmode="decimal" aria-label="Asignado" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm outline-none ring-forest/20 focus:border-forest focus:ring-4">
+                                    <input type="text" wire:model="assigned" inputmode="text" aria-label="Asignado" placeholder="10+5" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm outline-none ring-forest/20 focus:border-forest focus:ring-4">
                                     @error('assigned')
                                         <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                                     @enderror
                                 </div>
                                 <div>
-                                    <input type="text" wire:model="activity" inputmode="decimal" aria-label="Actividad" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm outline-none ring-forest/20 focus:border-forest focus:ring-4">
-                                    @error('activity')
+                                    <p class="text-right text-xs text-slate-400">{{ $this->activity }}</p>
+                                    <input type="text" wire:model="gasto" inputmode="text" aria-label="Nuevo gasto" placeholder="Nuevo gasto 10+5" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm outline-none ring-forest/20 focus:border-forest focus:ring-4">
+                                    @error('gasto')
                                         <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                                     @enderror
                                 </div>
                                 <div class="flex items-start justify-end gap-2">
                                     <div class="min-w-0 flex-1">
-                                        <input type="text" wire:model="available" inputmode="decimal" aria-label="Disponible" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm outline-none ring-forest/20 focus:border-forest focus:ring-4">
+                                        <input type="text" wire:model="available" inputmode="text" aria-label="Disponible" placeholder="10+5" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm outline-none ring-forest/20 focus:border-forest focus:ring-4">
                                         @error('available')
                                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
                                         @enderror
                                     </div>
                                     <button type="submit" class="rounded-xl bg-forest px-3 py-2 text-sm font-semibold text-white">Guardar</button>
+                                </div>
+                                </div>
+                                <div class="border-t border-emerald-100 bg-mint/30 px-4 py-3 sm:px-5">
+                                    <label for="gasto-cuenta-{{ $sobre->id }}" class="mb-1.5 block text-xs font-medium text-slate-600">Sale de la cuenta</label>
+                                    <select id="gasto-cuenta-{{ $sobre->id }}" wire:model="gastoCuentaId" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-forest/20 focus:border-forest focus:ring-4">
+                                        <option value="">Elegir cuenta</option>
+                                        @foreach ($this->plan->cuentas as $cuenta)
+                                            <option value="{{ $cuenta->id }}">{{ $cuenta->name }} ({{ $this->plan->formatMoney($cuenta->balance) }})</option>
+                                        @endforeach
+                                    </select>
+                                    @error('gastoCuentaId')
+                                        <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                                    @enderror
                                 </div>
                             </form>
                         @elseif ($overspent)
@@ -644,7 +1113,9 @@ new class extends Component
                                 <div class="flex flex-wrap items-center gap-2">
                                     <button type="button" wire:click="edit({{ $sobre->id }})" class="text-left text-sm font-medium text-slate-800">{{ $sobre->name }}</button>
                                     <span class="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-600">Sobregiro</span>
-                                    <button type="button" wire:click="openCover({{ $sobre->id }})" class="rounded-lg bg-white px-2 py-1 text-xs font-semibold text-red-600 ring-1 ring-red-200">Cubrir</button>
+                                    @if ($this->canCover($sobre))
+                                        <button type="button" wire:click="openCover({{ $sobre->id }})" class="rounded-lg bg-white px-2 py-1 text-xs font-semibold text-red-600 ring-1 ring-red-200">Cubrir</button>
+                                    @endif
                                 </div>
                                 <span class="text-right text-sm text-slate-600">{{ $this->plan->formatMoney($amounts['assigned']) }}</span>
                                 <span class="text-right text-sm text-slate-600">{{ $this->plan->formatMoney($amounts['activity']) }}</span>
@@ -654,12 +1125,12 @@ new class extends Component
                             <button
                                 type="button"
                                 wire:click="edit({{ $sobre->id }})"
-                                class="grid w-full grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))] items-center gap-2 px-4 py-3 text-left sm:px-5"
+                                class="grid w-full grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))] items-center gap-2 px-4 py-3 text-left hover:bg-mint/40 sm:px-5"
                             >
                                 <span class="text-sm font-medium text-slate-800">{{ $sobre->name }}</span>
                                 <span class="text-right text-sm text-slate-600">{{ $this->plan->formatMoney($amounts['assigned']) }}</span>
                                 <span class="text-right text-sm text-slate-600">{{ $this->plan->formatMoney($amounts['activity']) }}</span>
-                                <span class="text-right text-sm font-medium text-leaf">{{ $this->plan->formatMoney($amounts['available']) }}</span>
+                                <span class="text-right text-sm font-semibold text-leaf">{{ $this->plan->formatMoney($amounts['available']) }}</span>
                             </button>
                         @endif
                     @endforeach
@@ -677,35 +1148,50 @@ new class extends Component
 
         @if ($coverSobre = $this->coveredSobre())
             <section class="mt-4 rounded-2xl border border-red-100 bg-white p-5 shadow-sm">
-                    <div class="flex items-start justify-between gap-3">
-                        <div>
-                            <h2 class="text-lg font-semibold tracking-tight text-slate-900">Cubrir sobregiro</h2>
-                            <p class="mt-1 text-sm font-medium text-slate-800">{{ $coverSobre->name }}</p>
-                            <p class="mt-2 text-sm text-slate-600">{{ $this->shortfallLabel($coverSobre) }}</p>
-                        </div>
-                        <button type="button" wire:click="closeCover" aria-label="Cerrar" class="text-xl leading-none text-slate-400">×</button>
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <h2 class="text-lg font-semibold tracking-tight text-slate-900">Cubrir sobregiro</h2>
+                        <p class="mt-1 text-sm font-medium text-slate-800">{{ $coverSobre->name }}</p>
+                        <p class="mt-2 text-sm text-slate-600">A cubrir {{ $this->shortfallLabel($coverSobre) }}</p>
                     </div>
-                    @if ($coverMessage !== '')
-                        <p class="mt-4 text-sm text-red-600">{{ $coverMessage }}</p>
-                    @endif
-                    @if ($this->coverSources()->isNotEmpty())
-                        <ul class="mt-4 space-y-2">
-                            @foreach ($this->coverSources() as $source)
-                                <li wire:key="cover-source-{{ $source->id }}">
-                                    <button
-                                        type="button"
-                                        wire:click="chooseSource({{ $source->id }})"
-                                        @class([
-                                            'w-full rounded-xl px-3 py-2 text-left text-sm',
-                                            'bg-mint font-semibold text-forest' => $sourceSobreId === $source->id,
-                                            'bg-white text-slate-700 ring-1 ring-emerald-100' => $sourceSobreId !== $source->id,
-                                        ])
-                                    >{{ $source->name }}</button>
-                                </li>
-                            @endforeach
-                        </ul>
-                        <button type="button" wire:click="confirmCover" class="mt-4 rounded-xl bg-forest px-4 py-2.5 text-sm font-semibold text-white">Confirmar</button>
-                    @endif
+                    <button type="button" wire:click="closeCover" aria-label="Cerrar" class="text-xl leading-none text-slate-400">×</button>
+                </div>
+                <div class="mt-4 rounded-xl bg-mint/60 px-3 py-2 text-sm text-slate-700">
+                    <p>Cubierto: {{ $this->plan->formatMoney($this->coverTakenTotal()) }}</p>
+                    <p>Falta: {{ $this->plan->formatMoney($this->coverMissing()) }}</p>
+                </div>
+                @if ($this->coverIsOver())
+                    <p class="mt-3 text-sm text-red-600">Te estás pasando del monto a cubrir.</p>
+                @elseif ($coverMessage !== '')
+                    <p class="mt-3 text-sm text-red-600">{{ $coverMessage }}</p>
+                @endif
+                <ul class="mt-4 space-y-3">
+                    @foreach ($this->coverSources() as $source)
+                        <li wire:key="cover-source-{{ $source->id }}" class="rounded-xl bg-white px-3 py-2 ring-1 ring-emerald-100">
+                            <div class="flex items-center justify-between gap-2 text-sm">
+                                <span class="font-medium text-slate-800">{{ $source->name }}</span>
+                                <span class="text-slate-500">tiene {{ $this->plan->formatMoney($this->availableOf($source)) }}</span>
+                            </div>
+                            <input
+                                type="text"
+                                wire:model.live="coverTakes.{{ $source->id }}"
+                                inputmode="decimal"
+                                aria-label="Tomar de {{ $source->name }}"
+                                @class([
+                                    'mt-2 w-full rounded-xl border bg-slate-50 px-3 py-2 text-right text-sm outline-none ring-forest/20 focus:border-forest focus:bg-white focus:ring-4',
+                                    'border-red-400 text-red-600' => $this->emptiesSource($source) || $this->coverLineError($source) !== null,
+                                    'border-slate-200' => ! $this->emptiesSource($source) && $this->coverLineError($source) === null,
+                                ])
+                            >
+                            @if ($this->coverLineError($source) !== null)
+                                <p class="mt-1 text-sm text-red-600">{{ $this->coverLineError($source) }}</p>
+                            @elseif ($this->emptiesSource($source))
+                                <p class="mt-1 text-sm text-red-600">Dejas este sobre en 0.</p>
+                            @endif
+                        </li>
+                    @endforeach
+                </ul>
+                <button type="button" wire:click="confirmCover" class="mt-4 rounded-xl bg-forest px-4 py-2.5 text-sm font-semibold text-white">Confirmar</button>
             </section>
         @endif
 

@@ -42,7 +42,7 @@ class CreateCategorySobreTest extends TestCase
         $this->get('/')
             ->assertOk()
             ->assertSee('Dinero por asignar')
-            ->assertSee('Bs 1.250,00')
+            ->assertDontSee('Bs 1.250,00')
             ->assertDontSee('Eliminar');
     }
 

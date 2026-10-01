@@ -32,6 +32,14 @@ class Cuenta extends Model
     }
 
     /**
+     * @return HasMany<Gasto, $this>
+     */
+    public function gastos(): HasMany
+    {
+        return $this->hasMany(Gasto::class);
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array

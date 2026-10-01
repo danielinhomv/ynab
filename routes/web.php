@@ -25,6 +25,10 @@ Route::livewire('/planes/{plan}', 'pages::plan')
     ->middleware('auth')
     ->name('planes.show');
 
+Route::livewire('/planes/{plan}/configuracion', 'pages::plan-configuracion')
+    ->middleware('auth')
+    ->name('plan.configuracion');
+
 Route::livewire('/cuentas/{cuenta}', 'pages::cuenta')
     ->middleware('auth')
     ->name('cuentas.show');

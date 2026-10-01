@@ -84,7 +84,7 @@ class PlanListTest extends TestCase
 
         Livewire::test('plan-list')
             ->call('open', $foreign->id)
-            ->assertSet('openPlanId', null);
+            ->assertSet('openPlanId', $plan->id);
 
         $this->assertFalse(Schema::hasColumn('plans', 'last_opened_at'));
     }

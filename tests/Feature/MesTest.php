@@ -193,13 +193,14 @@ class MesTest extends TestCase
 
         Livewire::test('plan-sobres')
             ->assertDontSee('Vieja')
-            ->assertDontSee('Nueva')
+            ->assertSee('Nueva')
             ->call('abrirPlan', $older->id)
             ->assertSee('Vieja')
             ->assertDontSee('Nueva');
 
         Livewire::test('plan-list')
-            ->call('open', $latest->id)
-            ->assertSet('openPlanId', $latest->id);
+            ->assertSet('openPlanId', $latest->id)
+            ->call('open', $older->id)
+            ->assertSet('openPlanId', $older->id);
     }
 }

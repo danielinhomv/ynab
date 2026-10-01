@@ -27,7 +27,7 @@ class IngresoTest extends TestCase
             'descripcion',
             'monto',
         ]));
-        $this->assertFalse(Schema::hasTable('gastos'));
+        $this->assertTrue(Schema::hasTable('gastos'));
 
         $type = Schema::getColumnType('ingresos', 'monto');
 
@@ -192,8 +192,8 @@ class IngresoTest extends TestCase
             ->call('save')
             ->assertSee('ingreso registrado exitosamente')
             ->assertSee('Bs 12,50')
-            ->assertNoRedirect()
-            ->assertDontSee('Sueldo');
+            ->assertSee('Sueldo')
+            ->assertNoRedirect();
 
         $ingreso = Ingreso::query()->first();
 
@@ -208,10 +208,11 @@ class IngresoTest extends TestCase
 
         $this->get('/')
             ->assertSee('Dinero por asignar')
-            ->assertSee('Bs 1.250,00');
+            ->assertSee('Bs 2,50')
+            ->assertDontSee('Bs 1.250,00');
     }
 
-    public function test_account_view_does_not_save_an_expense(): void
+    public function test_account_view_lists_gastos_without_an_expense_form(): void
     {
         $user = User::factory()->create();
         $cuenta = $this->cuentaFor($user, '10.00');
@@ -219,10 +220,10 @@ class IngresoTest extends TestCase
         $this->actingAs($user)
             ->get(route('cuentas.show', $cuenta))
             ->assertOk()
-            ->assertDontSee('gasto')
+            ->assertSee('Gastos')
+            ->assertSee('Aún no hay gastos.')
             ->assertDontSee('Agregar gasto');
 
-        $this->assertFalse(Schema::hasTable('gastos'));
         $this->assertSame(0, Ingreso::query()->count());
         $this->assertSame('10.00', $cuenta->fresh()->balance);
     }

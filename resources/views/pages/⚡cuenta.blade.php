@@ -29,6 +29,10 @@ new #[Layout('layouts.app')] #[Title('Cuenta')] class extends Component
 
         $this->cuenta = $cuenta;
         $this->fecha = now()->toDateString();
+        $this->cuenta->load([
+            'ingresos' => fn ($query) => $query->orderByDesc('fecha')->orderByDesc('id'),
+            'gastos' => fn ($query) => $query->with('sobre')->orderByDesc('id'),
+        ]);
     }
 
     public function save(): void
@@ -83,7 +87,10 @@ new #[Layout('layouts.app')] #[Title('Cuenta')] class extends Component
         $updated = $cuenta->fresh('plan');
 
         if ($updated instanceof Cuenta) {
-            $this->cuenta = $updated;
+            $this->cuenta = $updated->load([
+                'ingresos' => fn ($query) => $query->orderByDesc('fecha')->orderByDesc('id'),
+                'gastos' => fn ($query) => $query->with('sobre')->orderByDesc('id'),
+            ]);
         }
         $this->confirmed = true;
         $this->origen = '';
@@ -162,46 +169,87 @@ new #[Layout('layouts.app')] #[Title('Cuenta')] class extends Component
 ?>
 
 <div class="px-4 py-6 sm:px-6 lg:px-8">
-    <form wire:submit="save" class="mx-auto w-full max-w-lg rounded-2xl bg-white p-6 shadow-sm ring-1 ring-emerald-100 sm:p-8">
-        <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-forest">Cuenta</p>
-        <h1 class="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{{ $cuenta->name }}</h1>
-        <p class="mt-2 text-lg font-semibold text-forest">{{ $cuenta->plan->formatMoney($cuenta->balance) }}</p>
+    <div class="mx-auto w-full max-w-3xl space-y-6">
+        <form wire:submit="save" class="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-emerald-100 sm:p-8">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-forest">Cuenta</p>
+            <h1 class="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{{ $cuenta->name }}</h1>
+            <p class="mt-2 text-lg font-semibold text-forest">{{ $cuenta->plan->formatMoney($cuenta->balance) }}</p>
 
-        @if ($confirmed)
-            <p class="mt-4 text-sm font-medium text-forest">ingreso registrado exitosamente</p>
-        @endif
+            @if ($confirmed)
+                <p class="mt-4 text-sm font-medium text-forest">ingreso registrado exitosamente</p>
+            @endif
 
-        <div class="mt-6 space-y-4">
-            <div>
-                <label for="ingreso-fecha" class="mb-1.5 block text-sm font-medium text-slate-700">Fecha</label>
-                <input id="ingreso-fecha" type="date" wire:model="fecha" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 transition focus:border-forest focus:bg-white focus:ring-4">
-                @error('fecha')
-                    <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
-                @enderror
+            <div class="mt-6 space-y-4">
+                <div>
+                    <label for="ingreso-fecha" class="mb-1.5 block text-sm font-medium text-slate-700">Fecha</label>
+                    <input id="ingreso-fecha" type="date" wire:model="fecha" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 transition focus:border-forest focus:bg-white focus:ring-4">
+                    @error('fecha')
+                        <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                    @enderror
+                </div>
+                <div>
+                    <label for="ingreso-origen" class="mb-1.5 block text-sm font-medium text-slate-700">De quién o cómo entra el dinero</label>
+                    <input id="ingreso-origen" type="text" wire:model="origen" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 transition focus:border-forest focus:bg-white focus:ring-4">
+                    @error('origen')
+                        <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                    @enderror
+                </div>
+                <div>
+                    <label for="ingreso-descripcion" class="mb-1.5 block text-sm font-medium text-slate-700">Descripción</label>
+                    <input id="ingreso-descripcion" type="text" wire:model="descripcion" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 transition focus:border-forest focus:bg-white focus:ring-4">
+                    @error('descripcion')
+                        <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                    @enderror
+                </div>
+                <div>
+                    <label for="ingreso-monto" class="mb-1.5 block text-sm font-medium text-slate-700">Monto</label>
+                    <input id="ingreso-monto" type="text" inputmode="decimal" wire:model="monto" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 transition focus:border-forest focus:bg-white focus:ring-4">
+                    @error('monto')
+                        <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                    @enderror
+                </div>
             </div>
-            <div>
-                <label for="ingreso-origen" class="mb-1.5 block text-sm font-medium text-slate-700">De quién o cómo entra el dinero</label>
-                <input id="ingreso-origen" type="text" wire:model="origen" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 transition focus:border-forest focus:bg-white focus:ring-4">
-                @error('origen')
-                    <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
-                @enderror
-            </div>
-            <div>
-                <label for="ingreso-descripcion" class="mb-1.5 block text-sm font-medium text-slate-700">Descripción</label>
-                <input id="ingreso-descripcion" type="text" wire:model="descripcion" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 transition focus:border-forest focus:bg-white focus:ring-4">
-                @error('descripcion')
-                    <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
-                @enderror
-            </div>
-            <div>
-                <label for="ingreso-monto" class="mb-1.5 block text-sm font-medium text-slate-700">Monto</label>
-                <input id="ingreso-monto" type="text" inputmode="decimal" wire:model="monto" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none ring-forest/20 transition focus:border-forest focus:bg-white focus:ring-4">
-                @error('monto')
-                    <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
-                @enderror
-            </div>
+
+            <button type="submit" class="mt-6 rounded-2xl bg-forest px-4 py-2.5 text-sm font-semibold text-white hover:bg-forest-dark">Guardar</button>
+        </form>
+
+        <div class="grid gap-4 md:grid-cols-2">
+            <section class="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-emerald-100">
+                <h2 class="text-sm font-semibold text-forest">Ingresos</h2>
+                @if ($cuenta->ingresos->isEmpty())
+                    <p class="mt-3 text-sm text-slate-500">Aún no hay ingresos.</p>
+                @else
+                    <ul class="mt-3 divide-y divide-emerald-50">
+                        @foreach ($cuenta->ingresos as $ingreso)
+                            <li class="flex items-start justify-between gap-3 py-2.5">
+                                <div class="min-w-0">
+                                    <p class="truncate text-sm font-medium text-slate-800">{{ $ingreso->origen }}</p>
+                                    <p class="truncate text-xs text-slate-500">{{ $ingreso->descripcion }} · {{ $ingreso->fecha->format('d/m/Y') }}</p>
+                                </div>
+                                <p class="shrink-0 text-sm font-semibold text-leaf">{{ $cuenta->plan->formatMoney($ingreso->monto) }}</p>
+                            </li>
+                        @endforeach
+                    </ul>
+                @endif
+            </section>
+            <section class="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-emerald-100">
+                <h2 class="text-sm font-semibold text-forest">Gastos</h2>
+                @if ($cuenta->gastos->isEmpty())
+                    <p class="mt-3 text-sm text-slate-500">Aún no hay gastos.</p>
+                @else
+                    <ul class="mt-3 divide-y divide-emerald-50">
+                        @foreach ($cuenta->gastos as $gasto)
+                            <li class="flex items-start justify-between gap-3 py-2.5">
+                                <div class="min-w-0">
+                                    <p class="truncate text-sm font-medium text-slate-800">{{ $gasto->sobre?->name ?? 'Sobre' }}</p>
+                                    <p class="text-xs text-slate-500">{{ $gasto->mes }}/{{ $gasto->anio }}</p>
+                                </div>
+                                <p class="shrink-0 text-sm font-semibold text-red-600">{{ $cuenta->plan->formatMoney($gasto->monto) }}</p>
+                            </li>
+                        @endforeach
+                    </ul>
+                @endif
+            </section>
         </div>
-
-        <button type="submit" class="mt-6 rounded-2xl bg-forest px-4 py-2.5 text-sm font-semibold text-white hover:bg-forest-dark">Guardar</button>
-    </form>
+    </div>
 </div>
